@@ -1,0 +1,8 @@
+[project]
+name = "n4-cli"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "pyperclip>=1.11.0",
+]

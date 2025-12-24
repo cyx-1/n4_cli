@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "n4-cli"
 version = "0.1.0"
@@ -6,3 +10,6 @@ requires-python = ">=3.12"
 dependencies = [
     "pyperclip>=1.11.0",
 ]
+
+[project.scripts]
+n4_cli = "n4_cli.main:main"

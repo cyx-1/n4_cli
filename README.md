@@ -1,6 +1,6 @@
 # n4_cli
 
-A simple CLI tool for clipboard operations.
+A simple CLI tool for various operations.
 
 ## Quick Start
 
@@ -13,7 +13,7 @@ uvx --from git+https://github.com/cyx-1/n4_cli n4_cli
 It is a good idea to set up an alias:
 
 ```
-# ~/zshrc
+# ~/.zshrc or ~/.bashrc
 alias n4="uvx --from git+https://github.com/cyx-1/n4_cli n4_cli"
 ```
 

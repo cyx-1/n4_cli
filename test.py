@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# /// script
+# dependencies = [
+#   "pyperclip",
+# ]
+# ///
 """
 Simple script that reads from clipboard and echoes it to the console.
 """

@@ -42,7 +42,7 @@ def main():
         return
     
     service_url = config["n4_service"]
-    
+    print(f"Getting information from: {service_url}") 
     try:
         response = requests.get(service_url)
         response.raise_for_status()

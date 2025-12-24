@@ -2,33 +2,34 @@
 
 A simple CLI tool for clipboard operations.
 
-## Features
+## Quick Start
 
-- **test.py**: A script that reads content from the system clipboard and echoes it to the console.
+Run directly from GitHub using [uv](https://github.com/astral-sh/uv):
 
-## Installation
+```bash
+uvx --from git+https://github.com/cyx-1/n4_cli n4_cli
+```
 
-This project uses [uv](https://github.com/astral-sh/uv) for dependency management.
+It is a good idea to set up an alias:
+
+```
+# ~/zshrc
+alias n4="uvx --from git+https://github.com/cyx-1/n4_cli n4_cli"
+```
+
+## Development
+
+If you want to develop locally:
 
 ```bash
 # Install dependencies
 uv sync
+
+# Run the CLI
+uv run n4_cli
 ```
-
-## Usage
-
-### test.py - Clipboard Echo
-
-Copy any text to your clipboard, then run:
-
-```bash
-uv run python test.py
-```
-
-The script will read from your clipboard and print the content to the console.
 
 ## Requirements
 
 - Python 3.12+
 - pyperclip (automatically installed via uv)
-- On Linux: xclip, xsel, or wl-clipboard for clipboard support

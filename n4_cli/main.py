@@ -2,110 +2,134 @@
 # /// script
 # dependencies = [
 #   "click",
+#   "prompt-toolkit",
 #   "pyyaml",
 #   "requests",
 #   "pyperclip",
 # ]
 # ///
 """
-CLI tool that reads configuration from ~/.n4_cli and performs HTTP GET requests.
-Also reads and prints clipboard content.
+CLI tool with modular commands and interactive command selection.
 """
 
+import importlib
+import pkgutil
 from pathlib import Path
 
 import click
-import pyperclip
-import requests
-import yaml
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import WordCompleter
+
+
+def load_commands():
+    """Dynamically load all commands from the commands package."""
+    commands = {}
+    commands_package = importlib.import_module("n4_cli.commands")
+    commands_path = Path(commands_package.__file__).parent
+
+    # Iterate through all Python files in the commands directory
+    for module_info in pkgutil.iter_modules([str(commands_path)]):
+        if module_info.name.startswith("_"):
+            continue
+
+        # Import the module
+        module = importlib.import_module(f"n4_cli.commands.{module_info.name}")
+
+        # Find Click commands in the module
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if isinstance(attr, click.Command):
+                # Use the command name if set, otherwise use the function name
+                command_name = getattr(attr, "name", attr_name)
+                commands[command_name] = attr
+                break
+
+    return commands
 
 
 @click.group(invoke_without_command=True)
 @click.pass_context
-@click.option(
-    "--config",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Path to configuration file (defaults to ~/.n4_cli)",
-)
-def cli(ctx, config):
-    """n4_cli - A command-line tool for n4 service operations."""
+def cli(ctx):
+    """n4_cli - A modular command-line tool with interactive command selection.
+
+    Run without arguments to enter interactive mode with typeahead completion.
+    """
     if ctx.invoked_subcommand is None:
-        # Default behavior when no subcommand is provided
-        ctx.invoke(fetch, config=config)
+        # Enter interactive mode
+        interactive_mode(ctx)
 
 
-@cli.command()
-@click.option(
-    "--config",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Path to configuration file (defaults to ~/.n4_cli)",
-)
-def fetch(config):
-    """Fetch information from n4_service and display clipboard content."""
-    config_path = config if config else Path.home() / ".n4_cli"
+def interactive_mode(ctx):
+    """Interactive mode with typeahead command selection."""
+    commands = load_commands()
+    command_names = sorted(commands.keys())
 
-    if not config_path.exists():
-        click.echo(
-            click.style(
-                f"Error: Configuration file not found at {config_path}",
-                fg="red",
-            ),
-            err=True,
-        )
-        raise click.Abort()
+    # Create completer for typeahead
+    completer = WordCompleter(command_names, ignore_case=True)
 
-    try:
-        with open(config_path, "r") as f:
-            config_data = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        click.echo(
-            click.style(f"Error parsing YAML file: {e}", fg="red"),
-            err=True,
-        )
-        raise click.Abort()
-    except IOError as e:
-        click.echo(
-            click.style(f"Error reading configuration file: {e}", fg="red"),
-            err=True,
-        )
-        raise click.Abort()
+    click.echo(click.style("n4_cli - Interactive Mode", fg="cyan", bold=True))
+    click.echo(click.style(f"Available commands: {', '.join(command_names)}", fg="green"))
+    click.echo(click.style("Type a command name (with Tab completion) or 'exit' to quit", fg="yellow"))
+    click.echo()
 
-    if not config_data or "n4_service" not in config_data:
-        click.echo(
-            click.style(
-                "Error: 'n4_service' key not found in configuration file",
-                fg="red",
-            ),
-            err=True,
-        )
-        raise click.Abort()
+    while True:
+        try:
+            # Prompt with typeahead completion
+            user_input = prompt(
+                "n4_cli> ",
+                completer=completer,
+                complete_while_typing=True,
+            ).strip()
 
-    service_url = config_data["n4_service"]
-    click.echo(f"Getting information from: {service_url}")
+            if not user_input:
+                continue
 
-    try:
-        response = requests.get(service_url)
-        response.raise_for_status()
-        click.echo(response.text)
-    except requests.exceptions.RequestException as e:
-        click.echo(
-            click.style(f"Error making HTTP request: {e}", fg="red"),
-            err=True,
-        )
-        raise click.Abort()
+            if user_input.lower() in ("exit", "quit", "q"):
+                click.echo(click.style("Goodbye!", fg="cyan"))
+                break
 
-    # Print clipboard content
-    clipboard_content = pyperclip.paste()
-    click.echo(clipboard_content)
+            # Parse the input to get command and arguments
+            parts = user_input.split()
+            command_name = parts[0]
+            args = parts[1:] if len(parts) > 1 else []
+
+            if command_name in commands:
+                # Execute the command
+                try:
+                    # Create a new context for the command
+                    cmd = commands[command_name]
+                    ctx.invoke(cmd, *args)
+                except click.exceptions.ClickException as e:
+                    e.show()
+                except Exception as e:
+                    click.echo(click.style(f"Error executing command: {e}", fg="red"), err=True)
+            else:
+                click.echo(
+                    click.style(f"Unknown command: {command_name}", fg="red"),
+                    err=True,
+                )
+                click.echo(f"Available commands: {', '.join(command_names)}")
+
+            click.echo()  # Add blank line after command output
+
+        except KeyboardInterrupt:
+            click.echo()
+            click.echo(click.style("Use 'exit' to quit", fg="yellow"))
+        except EOFError:
+            click.echo()
+            click.echo(click.style("Goodbye!", fg="cyan"))
+            break
 
 
-@cli.command()
-def clipboard():
-    """Display current clipboard content."""
-    clipboard_content = pyperclip.paste()
-    click.echo(clipboard_content)
+def register_commands(cli_group):
+    """Register all commands to the CLI group."""
+    commands = load_commands()
+    for command_name, command in commands.items():
+        cli_group.add_command(command, name=command_name)
+
+
+# Register all commands
+register_commands(cli)
 
 
 def main():

@@ -33,7 +33,7 @@ from prompt_toolkit.styles import Style
 
 
 def load_commands():
-    """Dynamically load all commands from the commands package."""
+    """Dynamically load all commands from the commands package with descriptions."""
     commands = {}
     commands_package = importlib.import_module("n4_cli.commands")
     commands_path = Path(commands_package.__file__).parent
@@ -52,38 +52,55 @@ def load_commands():
             if isinstance(attr, click.Command):
                 # Use the command name if set, otherwise use the function name
                 command_name = getattr(attr, "name", attr_name)
-                commands[command_name] = attr
+                # Extract short description from docstring
+                description = ""
+                if attr.help:
+                    # Use the first line of the help text
+                    description = attr.help.split('\n')[0].strip()
+
+                commands[command_name] = {
+                    'command': attr,
+                    'description': description
+                }
                 break
 
     return commands
 
 
-def fuzzy_match(query, text):
-    """Simple fuzzy matching - checks if all characters in query appear in text in order."""
+def fuzzy_match(query, text, description=""):
+    """Fuzzy matching - searches both command name and description."""
     if not query:
         return True, 0
 
     query = query.lower()
     text_lower = text.lower()
+    description_lower = description.lower() if description else ""
 
-    # Exact match gets highest score
+    # Combine text for searching
+    combined_text = f"{text_lower} {description_lower}"
+
+    # Exact match on name gets highest score
     if query == text_lower:
         return True, 1000
 
-    # Starts with query gets high score
+    # Starts with query on name gets high score
     if text_lower.startswith(query):
         return True, 500
 
-    # Contains query gets medium score
+    # Contains query in name gets medium-high score
     if query in text_lower:
-        return True, 100
+        return True, 400
 
-    # Fuzzy match - all characters appear in order
+    # Contains query in description gets medium score
+    if description_lower and query in description_lower:
+        return True, 200
+
+    # Fuzzy match - all characters appear in order in combined text
     query_idx = 0
     score = 0
-    for i, char in enumerate(text_lower):
+    for i, char in enumerate(combined_text):
         if query_idx < len(query) and char == query[query_idx]:
-            score += (10 - i)  # Earlier matches get higher scores
+            score += (10 - min(i, 10))  # Earlier matches get higher scores
             query_idx += 1
 
     if query_idx == len(query):
@@ -96,15 +113,15 @@ def get_matching_commands(commands, query):
     """Get all matching commands based on fuzzy search."""
     matches = []
 
-    for cmd_name in commands.keys():
-        is_match, score = fuzzy_match(query, cmd_name)
+    for cmd_name, cmd_info in commands.items():
+        is_match, score = fuzzy_match(query, cmd_name, cmd_info['description'])
         if is_match:
-            matches.append((cmd_name, score))
+            matches.append((cmd_name, cmd_info, score))
 
     # Sort by score (descending) and then alphabetically
-    matches.sort(key=lambda x: (-x[1], x[0]))
+    matches.sort(key=lambda x: (-x[2], x[0]))
 
-    return [cmd for cmd, _ in matches]
+    return [(name, info) for name, info, _ in matches]
 
 
 @click.group(invoke_without_command=True)
@@ -153,7 +170,7 @@ def interactive_mode(ctx):
         query = input_buffer.text
         choices = get_matching_commands(commands, query)
         if not choices:
-            choices = all_command_names
+            choices = [(name, commands[name]) for name in all_command_names]
         return choices
 
     def get_visible_choices():
@@ -223,7 +240,7 @@ def interactive_mode(ctx):
         """Execute selected command."""
         all_choices = get_current_choices()
         if all_choices and 0 <= state.selected_idx < len(all_choices):
-            state.selected_command = all_choices[state.selected_idx]
+            state.selected_command = all_choices[state.selected_idx][0]
             event.app.exit()
 
     @kb.add('c-c')
@@ -248,12 +265,28 @@ def interactive_mode(ctx):
         if state.scroll_offset > 0:
             lines.append(("class:scroll", "  ▲ More above...\n"))
 
-        for i, choice in enumerate(visible_choices):
+        for i, (choice_name, choice_info) in enumerate(visible_choices):
             absolute_idx = state.scroll_offset + i
-            if absolute_idx == state.selected_idx:
-                lines.append(("class:selected", f"  {i+1}. → {choice}\n"))
+            description = choice_info['description']
+
+            # Format: "1. command-name - Description here"
+            if description:
+                display_text = f"  {i+1}. {choice_name} - {description}\n"
             else:
-                lines.append(("class:unselected", f"  {i+1}.   {choice}\n"))
+                display_text = f"  {i+1}. {choice_name}\n"
+
+            if absolute_idx == state.selected_idx:
+                lines.append(("class:selected", f"  {i+1}. → {choice_name}"))
+                if description:
+                    lines.append(("class:selected_desc", f" - {description}\n"))
+                else:
+                    lines.append(("class:selected", "\n"))
+            else:
+                lines.append(("class:unselected", f"  {i+1}.   {choice_name}"))
+                if description:
+                    lines.append(("class:unselected_desc", f" - {description}\n"))
+                else:
+                    lines.append(("class:unselected", "\n"))
 
         # Show scroll indicator at bottom if there are items below
         if state.scroll_offset + len(visible_choices) < total_count:
@@ -263,7 +296,7 @@ def interactive_mode(ctx):
 
     # Create layout
     header_text = [
-        ("class:title", "n4_cli - Interactive Mode\n"),
+        ("class:title", "n4 - your trusted helper\n"),
         ("class:info", f"Total commands: {len(all_command_names)}\n"),
         ("class:help", "Type to filter • ↑↓ or 1-5 to select • Enter to run • Ctrl+C to exit\n"),
         ("class:separator", "\n"),
@@ -295,7 +328,9 @@ def interactive_mode(ctx):
         'separator': '',
         'header': 'white bold',
         'selected': 'cyan bold',
+        'selected_desc': 'cyan',
         'unselected': 'gray',
+        'unselected_desc': '#666666',
         'scroll': 'magenta',
     })
 
@@ -336,7 +371,7 @@ def interactive_mode(ctx):
                 break
 
             try:
-                cmd = commands[state.selected_command]
+                cmd = commands[state.selected_command]['command']
                 ctx.invoke(cmd)
             except click.exceptions.ClickException as e:
                 e.show()
@@ -352,8 +387,8 @@ def interactive_mode(ctx):
 def register_commands(cli_group):
     """Register all commands to the CLI group."""
     commands = load_commands()
-    for command_name, command in commands.items():
-        cli_group.add_command(command, name=command_name)
+    for command_name, command_info in commands.items():
+        cli_group.add_command(command_info['command'], name=command_name)
 
 
 # Register all commands

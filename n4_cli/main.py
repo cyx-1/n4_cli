@@ -92,8 +92,8 @@ def fuzzy_match(query, text):
     return False, 0
 
 
-def get_matching_commands(commands, query, limit=5):
-    """Get top matching commands based on fuzzy search."""
+def get_matching_commands(commands, query):
+    """Get all matching commands based on fuzzy search."""
     matches = []
 
     for cmd_name in commands.keys():
@@ -104,7 +104,7 @@ def get_matching_commands(commands, query, limit=5):
     # Sort by score (descending) and then alphabetically
     matches.sort(key=lambda x: (-x[1], x[0]))
 
-    return [cmd for cmd, _ in matches[:limit]]
+    return [cmd for cmd, _ in matches]
 
 
 @click.group(invoke_without_command=True)
@@ -120,13 +120,17 @@ def cli(ctx):
 
 
 def interactive_mode(ctx):
-    """Interactive mode with numbered dynamic choices."""
+    """Interactive mode with numbered dynamic choices and arrow key navigation."""
     commands = load_commands()
     all_command_names = sorted(commands.keys())
+
+    # Configuration
+    MAX_VISIBLE_CHOICES = 5
 
     # State management
     class AppState:
         selected_idx = 0
+        scroll_offset = 0
         selected_command = None
         should_exit = False
 
@@ -135,7 +139,10 @@ def interactive_mode(ctx):
     # Create buffer for input
     input_buffer = Buffer(
         multiline=False,
-        on_text_changed=lambda _: setattr(state, 'selected_idx', 0),
+        on_text_changed=lambda _: (
+            setattr(state, 'selected_idx', 0),
+            setattr(state, 'scroll_offset', 0)
+        ),
     )
 
     # Create key bindings
@@ -144,52 +151,79 @@ def interactive_mode(ctx):
     def get_current_choices():
         """Get current matching commands based on input."""
         query = input_buffer.text
-        choices = get_matching_commands(commands, query, limit=5)
+        choices = get_matching_commands(commands, query)
         if not choices:
-            choices = all_command_names[:5]
+            choices = all_command_names
         return choices
+
+    def get_visible_choices():
+        """Get the visible window of choices."""
+        all_choices = get_current_choices()
+        start = state.scroll_offset
+        end = start + MAX_VISIBLE_CHOICES
+        return all_choices[start:end], len(all_choices)
+
+    @kb.add('up')
+    def move_up(event):
+        """Move selection up."""
+        all_choices = get_current_choices()
+        if state.selected_idx > 0:
+            state.selected_idx -= 1
+            # Scroll up if needed
+            if state.selected_idx < state.scroll_offset:
+                state.scroll_offset = state.selected_idx
+
+    @kb.add('down')
+    def move_down(event):
+        """Move selection down."""
+        all_choices = get_current_choices()
+        if state.selected_idx < len(all_choices) - 1:
+            state.selected_idx += 1
+            # Scroll down if needed
+            if state.selected_idx >= state.scroll_offset + MAX_VISIBLE_CHOICES:
+                state.scroll_offset = state.selected_idx - MAX_VISIBLE_CHOICES + 1
 
     @kb.add('1')
     def select_1(event):
-        """Select choice 1."""
-        choices = get_current_choices()
-        if len(choices) >= 1:
-            state.selected_idx = 0
+        """Select visible choice 1."""
+        visible_choices, _ = get_visible_choices()
+        if len(visible_choices) >= 1:
+            state.selected_idx = state.scroll_offset + 0
 
     @kb.add('2')
     def select_2(event):
-        """Select choice 2."""
-        choices = get_current_choices()
-        if len(choices) >= 2:
-            state.selected_idx = 1
+        """Select visible choice 2."""
+        visible_choices, _ = get_visible_choices()
+        if len(visible_choices) >= 2:
+            state.selected_idx = state.scroll_offset + 1
 
     @kb.add('3')
     def select_3(event):
-        """Select choice 3."""
-        choices = get_current_choices()
-        if len(choices) >= 3:
-            state.selected_idx = 2
+        """Select visible choice 3."""
+        visible_choices, _ = get_visible_choices()
+        if len(visible_choices) >= 3:
+            state.selected_idx = state.scroll_offset + 2
 
     @kb.add('4')
     def select_4(event):
-        """Select choice 4."""
-        choices = get_current_choices()
-        if len(choices) >= 4:
-            state.selected_idx = 3
+        """Select visible choice 4."""
+        visible_choices, _ = get_visible_choices()
+        if len(visible_choices) >= 4:
+            state.selected_idx = state.scroll_offset + 3
 
     @kb.add('5')
     def select_5(event):
-        """Select choice 5."""
-        choices = get_current_choices()
-        if len(choices) >= 5:
-            state.selected_idx = 4
+        """Select visible choice 5."""
+        visible_choices, _ = get_visible_choices()
+        if len(visible_choices) >= 5:
+            state.selected_idx = state.scroll_offset + 4
 
     @kb.add('enter')
     def accept(event):
         """Execute selected command."""
-        choices = get_current_choices()
-        if choices and 0 <= state.selected_idx < len(choices):
-            state.selected_command = choices[state.selected_idx]
+        all_choices = get_current_choices()
+        if all_choices and 0 <= state.selected_idx < len(all_choices):
+            state.selected_command = all_choices[state.selected_idx]
             event.app.exit()
 
     @kb.add('c-c')
@@ -207,14 +241,23 @@ def interactive_mode(ctx):
     # Function to generate choices display
     def get_choices_text():
         """Generate formatted text for choices."""
-        choices = get_current_choices()
-        lines = [("class:header", "Available commands:\n")]
+        visible_choices, total_count = get_visible_choices()
+        lines = [("class:header", f"Available commands (showing {len(visible_choices)} of {total_count}):\n")]
 
-        for i, choice in enumerate(choices):
-            if i == state.selected_idx:
+        # Show scroll indicator at top if there are items above
+        if state.scroll_offset > 0:
+            lines.append(("class:scroll", "  ▲ More above...\n"))
+
+        for i, choice in enumerate(visible_choices):
+            absolute_idx = state.scroll_offset + i
+            if absolute_idx == state.selected_idx:
                 lines.append(("class:selected", f"  {i+1}. → {choice}\n"))
             else:
                 lines.append(("class:unselected", f"  {i+1}.   {choice}\n"))
+
+        # Show scroll indicator at bottom if there are items below
+        if state.scroll_offset + len(visible_choices) < total_count:
+            lines.append(("class:scroll", "  ▼ More below...\n"))
 
         return lines
 
@@ -222,7 +265,7 @@ def interactive_mode(ctx):
     header_text = [
         ("class:title", "n4_cli - Interactive Mode\n"),
         ("class:info", f"Total commands: {len(all_command_names)}\n"),
-        ("class:help", "Type to filter • Press 1-5 to select • Enter to run • Ctrl+C to exit\n"),
+        ("class:help", "Type to filter • ↑↓ or 1-5 to select • Enter to run • Ctrl+C to exit\n"),
         ("class:separator", "\n"),
     ]
 
@@ -234,7 +277,7 @@ def interactive_mode(ctx):
             ),
             Window(
                 FormattedTextControl(get_choices_text),
-                height=6,
+                height=8,
             ),
             Window(height=1, char="-"),
             Window(
@@ -253,6 +296,7 @@ def interactive_mode(ctx):
         'header': 'white bold',
         'selected': 'cyan bold',
         'unselected': 'gray',
+        'scroll': 'magenta',
     })
 
     # Create application
@@ -268,6 +312,7 @@ def interactive_mode(ctx):
     while True:
         # Reset state
         state.selected_idx = 0
+        state.scroll_offset = 0
         state.selected_command = None
         state.should_exit = False
         input_buffer.text = ""

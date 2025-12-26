@@ -17,3 +17,9 @@ dependencies = [
 
 [project.scripts]
 n4_cli = "n4_cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["n4_cli"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"n4_cli/assets/clipboard-viewer.html" = "n4_cli/assets/clipboard-viewer.html"

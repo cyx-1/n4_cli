@@ -48,20 +48,23 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
             with open(file_path, 'r') as f:
                 content = f.readlines()
 
-            # Process lines: remove newlines and format with quotes
-            flattened = ''.join(f"'{line.rstrip()}',".replace('\n', '') for line in content)
+            # Filter out empty lines and strip whitespace
+            lines = [line.strip() for line in content if line.strip()]
+
+            # Process lines: format with quotes
+            flattened = ''.join(f"'{line}'," for line in lines)
 
             # Determine output destination
             if output:
                 # Write to specified output file
                 with open(output, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(content)} lines to: {output}", fg="green"))
+                click.echo(click.style(f"[OK] Flattened {len(lines)} lines to: {output}", fg="green"))
             elif in_place or (not output and not in_place):
                 # Default: in-place editing when file is provided
                 with open(file_path, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(content)} lines in: {file_path}", fg="green"))
+                click.echo(click.style(f"[OK] Flattened {len(lines)} lines in: {file_path}", fg="green"))
             else:
                 # Output to stdout
                 click.echo(flattened)
@@ -76,14 +79,17 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
             # Read from stdin
             content = sys.stdin.readlines()
 
-            # Process lines: remove newlines and format with quotes
-            flattened = ''.join(f"'{line.rstrip()}',".replace('\n', '') for line in content)
+            # Filter out empty lines and strip whitespace
+            lines = [line.strip() for line in content if line.strip()]
+
+            # Process lines: format with quotes
+            flattened = ''.join(f"'{line}'," for line in lines)
 
             # Output destination
             if output:
                 with open(output, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(content)} lines to: {output}", fg="green"), err=True)
+                click.echo(click.style(f"[OK] Flattened {len(lines)} lines to: {output}", fg="green"), err=True)
             else:
                 # Write to stdout (for piping)
                 click.echo(flattened)
@@ -103,8 +109,11 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
 
             lines = clipboard_content.split('\n')
 
+            # Filter out empty lines and strip whitespace (including \r)
+            lines = [line.strip() for line in lines if line.strip()]
+
             # Process lines: format with quotes
-            flattened = ''.join(f"'{line}',".replace('\n', '') for line in lines)
+            flattened = ''.join(f"'{line}'," for line in lines)
 
             if output:
                 with open(output, 'w') as f:

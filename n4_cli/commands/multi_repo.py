@@ -509,7 +509,16 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
         for action_type, repos in actions_to_execute:
             click.echo(click.style(f"{action_type.upper()}:", fg="cyan", bold=True))
             for repo in repos:
-                click.echo(f"  • {repo.name}")
+                if action_type == "push":
+                    click.echo(f"  • {repo.name}: {len(repo.changed_files)} file(s) to commit and push")
+                elif action_type == "pull":
+                    click.echo(f"  • {repo.name}:")
+                    for branch, count in repo.behind_branches.items():
+                        click.echo(f"      - Pull {branch} ({count} commit(s) behind)")
+                elif action_type == "prune":
+                    click.echo(f"  • {repo.name}:")
+                    for branch in repo.merged_branches:
+                        click.echo(f"      - DELETE {branch}")
             click.echo()
 
         if not click.confirm(click.style("Proceed with these actions?", fg="yellow", bold=True)):

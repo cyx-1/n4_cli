@@ -1,0 +1,17 @@
+# .n4_cli configuration file
+# This file is used by the git-wip command to check multiple git repositories
+# for uncommitted changes and unpushed commits.
+#
+# Format: One project path per line
+# Lines starting with # are ignored as comments
+# You can use ~ for home directory expansion
+
+# Example projects:
+~/code/my-project
+~/work/important-repo
+/home/user/projects/another-project
+
+# To use this file:
+# 1. Copy to your home directory: cp .n4_cli.example ~/.n4_cli
+# 2. Edit ~/.n4_cli and add your project paths
+# 3. Run: n4 git-wip

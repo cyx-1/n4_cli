@@ -1,13 +1,65 @@
 """Clipboard command - opens interactive web-based clipboard viewer."""
 
-import html
 import json
+import re
 import tempfile
 from pathlib import Path
 
 import click
 import pyperclip
 import webbrowser
+
+
+def detect_content_formats(content):
+    """Detect what formats the clipboard content might be in."""
+    formats = {}
+
+    if not content:
+        return formats
+
+    # Always include text/plain
+    formats['text/plain'] = content
+
+    # Detect HTML
+    html_patterns = [
+        r'^\s*<!DOCTYPE\s+html',
+        r'^\s*<html',
+        r'<\/html>\s*$',
+        r'<(div|span|p|table|body|head)\s',
+    ]
+
+    is_html = any(re.search(pattern, content, re.IGNORECASE | re.MULTILINE) for pattern in html_patterns)
+
+    if is_html:
+        formats['text/html'] = content
+
+    # Detect JSON
+    try:
+        json.loads(content.strip())
+        formats['application/json'] = content
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Detect XML
+    if content.strip().startswith('<?xml') or (content.strip().startswith('<') and not is_html):
+        formats['application/xml'] = content
+
+    # Detect URLs
+    url_pattern = r'^https?://[^\s]+$'
+    if re.match(url_pattern, content.strip()):
+        formats['text/uri-list'] = content
+
+    # Detect Markdown (simple heuristic)
+    markdown_patterns = [
+        r'^#+\s',  # Headers
+        r'\[.*?\]\(.*?\)',  # Links
+        r'^\*\*.*?\*\*',  # Bold
+        r'^```',  # Code blocks
+    ]
+    if any(re.search(pattern, content, re.MULTILINE) for pattern in markdown_patterns):
+        formats['text/markdown'] = content
+
+    return formats
 
 
 @click.command()
@@ -20,6 +72,7 @@ def clipboard():
     - Files with metadata
     - Multiple format inspection
 
+    Automatically detects and displays rich formats like HTML, JSON, XML, and Markdown.
     Based on Simon Willison's clipboard-viewer tool.
     """
     # Get the HTML file path
@@ -41,50 +94,86 @@ def clipboard():
     with open(html_file, 'r', encoding='utf-8') as f:
         html_content = f.read()
 
+    # Detect all formats
+    detected_formats = detect_content_formats(clipboard_content)
+
     # Inject JavaScript to auto-populate clipboard content
-    # We'll add a script that simulates having clipboard content
-    if clipboard_content:
-        # Escape the clipboard content for JavaScript
-        escaped_content = json.dumps(clipboard_content)
+    if detected_formats:
+        # Escape the formats data for JavaScript
+        formats_json = json.dumps(detected_formats)
 
         injection_script = f"""
     <script>
         // Auto-populate clipboard content on page load
         window.addEventListener('DOMContentLoaded', function() {{
             const output = document.getElementById('output');
-            const clipboardContent = {escaped_content};
+            const detectedFormats = {formats_json};
 
-            if (clipboardContent) {{
+            if (Object.keys(detectedFormats).length > 0) {{
                 // Clear the initial message
                 output.innerHTML = '';
 
-                // Create a format display
-                const formatDiv = document.createElement('div');
-                formatDiv.className = 'format';
+                // Display each detected format
+                for (const [formatType, formatContent] of Object.entries(detectedFormats)) {{
+                    const formatDiv = document.createElement('div');
+                    formatDiv.className = 'format';
 
-                const formatTitle = document.createElement('h2');
-                formatTitle.textContent = 'text/plain';
-                formatDiv.appendChild(formatTitle);
+                    const formatTitle = document.createElement('h2');
+                    formatTitle.textContent = formatType;
+                    formatDiv.appendChild(formatTitle);
 
-                const formatContent = document.createElement('pre');
-                formatContent.className = 'format-content';
-                formatContent.textContent = clipboardContent;
-                formatDiv.appendChild(formatContent);
+                    const formatContentWrapper = document.createElement('div');
+                    formatContentWrapper.className = 'format-content';
 
-                output.appendChild(formatDiv);
+                    // Special handling for HTML
+                    if (formatType === 'text/html') {{
+                        const htmlPreview = document.createElement('div');
+                        htmlPreview.innerHTML = '<strong>HTML Source:</strong>';
+                        formatContentWrapper.appendChild(htmlPreview);
+
+                        const htmlPre = document.createElement('pre');
+                        htmlPre.textContent = formatContent;
+                        formatContentWrapper.appendChild(htmlPre);
+
+                        // Add rendered preview
+                        const renderedTitle = document.createElement('div');
+                        renderedTitle.innerHTML = '<strong style="margin-top: 15px; display: block;">Rendered Preview:</strong>';
+                        formatContentWrapper.appendChild(renderedTitle);
+
+                        const renderedDiv = document.createElement('div');
+                        renderedDiv.style.border = '1px solid #ccc';
+                        renderedDiv.style.padding = '10px';
+                        renderedDiv.style.marginTop = '5px';
+                        renderedDiv.style.backgroundColor = '#fff';
+                        renderedDiv.innerHTML = formatContent;
+                        formatContentWrapper.appendChild(renderedDiv);
+                    }} else {{
+                        const formatPre = document.createElement('pre');
+                        formatPre.textContent = formatContent;
+                        formatContentWrapper.appendChild(formatPre);
+                    }}
+
+                    formatDiv.appendChild(formatContentWrapper);
+                    output.appendChild(formatDiv);
+                }}
 
                 // Add info section
                 const eventInfo = document.createElement('div');
                 eventInfo.className = 'format';
+
+                const formatsList = Object.keys(detectedFormats).join(', ');
+                const contentLength = detectedFormats['text/plain'] ? detectedFormats['text/plain'].length : 0;
+                const lineCount = detectedFormats['text/plain'] ? detectedFormats['text/plain'].split('\\n').length : 0;
+
                 eventInfo.innerHTML = `
                     <h2>Clipboard Information</h2>
                     <div class="format-content">
                         <pre>Content loaded automatically from system clipboard
-Size: ${{clipboardContent.length}} characters
-Lines: ${{clipboardContent.split('\\n').length}}
-Type: text/plain
+Size: ${{contentLength}} characters
+Lines: ${{lineCount}}
+Detected formats: ${{formatsList}}
 
-Note: To see all clipboard formats (HTML, images, etc.), paste content manually using Ctrl+V or Cmd+V</pre>
+Note: Paste manually (Ctrl+V / Cmd+V) to see additional system-level formats like images and files.</pre>
                     </div>
                 `;
                 output.appendChild(eventInfo);
@@ -106,16 +195,19 @@ Note: To see all clipboard formats (HTML, images, etc.), paste content manually 
         click.echo(click.style("Opening clipboard viewer in browser...", fg="cyan"))
 
         if clipboard_content:
-            preview = clipboard_content[:100]
+            preview = clipboard_content[:100].replace('\n', ' ')
             if len(clipboard_content) > 100:
                 preview += "..."
-            click.echo(click.style(f"Clipboard content ({len(clipboard_content)} chars): {preview}", fg="green"))
+
+            format_types = list(detected_formats.keys())
+            click.echo(click.style(f"Detected formats: {', '.join(format_types)}", fg="green"))
+            click.echo(click.style(f"Content preview: {preview}", fg="green"))
         else:
             click.echo(click.style("Clipboard is empty", fg="yellow"))
 
         webbrowser.open(f"file://{temp_html_path}")
         click.echo(click.style(f"✓ Viewer opened in browser", fg="green"))
-        click.echo(click.style("\nYou can paste (Ctrl+V / Cmd+V) to see additional clipboard formats.", fg="yellow"))
+        click.echo(click.style("\nYou can paste (Ctrl+V / Cmd+V) to see system-level formats like images.", fg="yellow"))
     except Exception as e:
         click.echo(click.style(f"Error opening browser: {e}", fg="red"), err=True)
         # Clean up temp file on error

@@ -53,7 +53,7 @@ def git_merge_latest(dry_run):
         ("git checkout main", "Checkout main branch"),
         ("git pull origin main", "Update main branch to latest commit"),
         ("git fetch --all", "Fetch all remote branches"),
-        ("git for-each-ref --sort=-committerdate refs/remotes/origin --format='%(objectname)' | head -1", "Find latest commit across all remote branches"),
+        ("git for-each-ref --sort=-committerdate refs/remotes/origin --format=%(objectname) | head -1", "Find latest commit across all remote branches"),
     ]
 
     if dry_run:
@@ -83,7 +83,7 @@ def git_merge_latest(dry_run):
 
     # Step 4: Find latest commit
     latest_commit = run_git_command(
-        "git for-each-ref --sort=-committerdate refs/remotes/origin --format='%(objectname)' | head -1",
+        "git for-each-ref --sort=-committerdate refs/remotes/origin --format=%(objectname) | head -1",
         "Find latest commit across all remote branches"
     )
 

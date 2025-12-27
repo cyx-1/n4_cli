@@ -48,8 +48,8 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
             with open(file_path, 'r') as f:
                 content = f.readlines()
 
-            # Filter out empty lines and strip whitespace
-            lines = [line.strip() for line in content if line.strip()]
+            # Filter out empty lines but preserve trailing whitespace
+            lines = [line.rstrip('\r\n') for line in content if line.strip()]
 
             # Process lines: format with quotes
             flattened = ''.join(f"'{line}'," for line in lines)
@@ -79,8 +79,8 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
             # Read from stdin
             content = sys.stdin.readlines()
 
-            # Filter out empty lines and strip whitespace
-            lines = [line.strip() for line in content if line.strip()]
+            # Filter out empty lines but preserve trailing whitespace
+            lines = [line.rstrip('\r\n') for line in content if line.strip()]
 
             # Process lines: format with quotes
             flattened = ''.join(f"'{line}'," for line in lines)
@@ -109,8 +109,8 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
 
             lines = clipboard_content.split('\n')
 
-            # Filter out empty lines and strip whitespace (including \r)
-            lines = [line.strip() for line in lines if line.strip()]
+            # Filter out empty lines but preserve trailing whitespace
+            lines = [line.rstrip('\r\n') for line in lines if line.strip()]
 
             # Process lines: format with quotes
             flattened = ''.join(f"'{line}'," for line in lines)

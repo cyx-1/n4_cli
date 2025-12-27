@@ -63,10 +63,13 @@ def detect_content_formats(content):
 
 
 @click.command()
-def clipboard():
-    """Open interactive web-based clipboard format viewer.
+@click.option("--html", is_flag=True, help="Open web-based clipboard viewer in browser")
+def clipboard(html):
+    """Display clipboard content or open interactive web-based viewer.
 
-    Opens a browser window showing all available clipboard formats including:
+    By default, reads from clipboard and prints to stdout.
+
+    With --html flag, opens a browser window showing all available clipboard formats:
     - Text formats (plain, HTML, RTF)
     - Images and screenshots
     - Files with metadata
@@ -74,7 +77,28 @@ def clipboard():
 
     Automatically detects and displays rich formats like HTML, JSON, XML, and Markdown.
     Based on Simon Willison's clipboard-viewer tool.
+
+    Examples:
+      n4 clipboard              # Print clipboard to stdout
+      n4 clipboard --html       # Open web viewer
     """
+    # Get clipboard content
+    try:
+        clipboard_content = pyperclip.paste()
+    except Exception as e:
+        click.echo(click.style(f"Error: Could not read clipboard: {e}", fg="red"), err=True)
+        raise click.Abort()
+
+    if not clipboard_content:
+        click.echo(click.style("Clipboard is empty", fg="yellow"), err=True)
+        return
+
+    # Default behavior: print to stdout
+    if not html:
+        click.echo(clipboard_content)
+        return
+
+    # HTML mode: open web viewer
     # Get the HTML file path
     assets_dir = Path(__file__).parent.parent / "assets"
     html_file = assets_dir / "clipboard-viewer.html"
@@ -82,13 +106,6 @@ def clipboard():
     if not html_file.exists():
         click.echo(click.style("Error: clipboard-viewer.html not found in assets", fg="red"), err=True)
         raise click.Abort()
-
-    # Read current clipboard content
-    try:
-        clipboard_content = pyperclip.paste()
-    except Exception as e:
-        click.echo(click.style(f"Warning: Could not read clipboard: {e}", fg="yellow"))
-        clipboard_content = ""
 
     # Read the HTML template
     with open(html_file, 'r', encoding='utf-8') as f:

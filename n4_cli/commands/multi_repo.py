@@ -155,6 +155,10 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
                 if not branch:
                     continue
 
+                # Exclude symbolic references like "origin/HEAD -> origin/main"
+                if '->' in branch:
+                    continue
+
                 # Exclude origin/main, origin/master, and origin/HEAD
                 if branch in [f'origin/{main_branch}', 'origin/main', 'origin/master', 'origin/HEAD']:
                     continue

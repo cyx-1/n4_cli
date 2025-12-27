@@ -45,14 +45,8 @@ n4_cli multi-repo -p ~/projects -r
 # Show all repos including clean ones
 n4_cli multi-repo -v
 
-# Commit and push changes to all repos with uncommitted files
-n4_cli multi-repo --action push
-
-# Pull all branches that are behind remote
-n4_cli multi-repo --action pull
-
-# Delete merged branches
-n4_cli multi-repo --action prune
+# Interactive mode - walk through available actions and execute
+n4_cli multi-repo --action
 ```
 
 **Features:**

@@ -362,10 +362,11 @@ async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
 )
 @click.option(
     "--action",
-    type=click.Choice(["push", "pull", "prune"], case_sensitive=False),
-    help="Execute action: push (commit & push changes), pull (update behind branches), prune (delete merged branches)"
+    "-a",
+    is_flag=True,
+    help="Interactive mode to select and execute actions (push/pull/prune)"
 )
-def multi_repo(path: Path, recursive: bool, verbose: bool, action: Optional[str]):
+def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
     """Manage multiple git repositories in parallel.
 
     This command analyzes all git repositories in the specified path and reports:
@@ -373,15 +374,13 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: Optional[str]
     - Branches behind their remote tracking branch
     - Branches that have been merged to main/master
 
-    Use --action to perform batch operations after reviewing the status.
+    Use --action for interactive mode to select and execute batch operations.
 
     Examples:
       n4_cli multi-repo                    # Check current directory
       n4_cli multi-repo -p ~/projects -r   # Check all repos recursively
       n4_cli multi-repo -v                 # Show all repos including clean ones
-      n4_cli multi-repo --action push      # Commit and push changes
-      n4_cli multi-repo --action pull      # Update all behind branches
-      n4_cli multi-repo --action prune     # Delete merged branches
+      n4_cli multi-repo --action           # Interactive mode to execute actions
     """
     # Find all git repositories
     click.echo(click.style("🔍 Scanning for git repositories...", fg="cyan"))
@@ -401,58 +400,90 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: Optional[str]
 
     # Execute action if specified
     if action:
-        click.echo(click.style(f"\n=== Action: {action.upper()} ===\n", fg="yellow", bold=True))
+        click.echo(click.style("\n=== Interactive Action Mode ===\n", fg="yellow", bold=True))
 
-        # Count affected repos
-        if action == "push":
-            affected = [s for s in statuses if s.has_uncommitted and not s.errors]
-            action_desc = "commit and push changes"
-        elif action == "pull":
-            affected = [s for s in statuses if s.behind_branches and not s.errors]
-            action_desc = "pull branches to catch up with remote"
-        elif action == "prune":
-            affected = [s for s in statuses if s.merged_branches and not s.errors]
-            action_desc = "delete merged branches"
-        else:
-            click.echo(click.style("Invalid action", fg="red"))
+        # Determine available actions
+        push_repos = [s for s in statuses if s.has_uncommitted and not s.errors]
+        pull_repos = [s for s in statuses if s.behind_branches and not s.errors]
+        prune_repos = [s for s in statuses if s.merged_branches and not s.errors]
+
+        if not any([push_repos, pull_repos, prune_repos]):
+            click.echo(click.style("✓ All repositories are clean. No actions needed.", fg="green"))
             return
 
-        if not affected:
-            click.echo(click.style(f"No repositories require this action.", fg="green"))
-            return
+        # Show available actions
+        click.echo("Available actions:\n")
 
-        # Show what will be affected
-        click.echo(f"This will {action_desc} for:\n")
-        for status in affected:
-            click.echo(f"  • {status.name}")
-            if action == "push" and status.changed_files:
-                click.echo(f"    ({len(status.changed_files)} changed file(s))")
-            elif action == "pull" and status.behind_branches:
+        actions_to_execute = []
+
+        # Option 1: Push changes
+        if push_repos:
+            click.echo(click.style("1. PUSH - Commit and push changes", fg="cyan", bold=True))
+            for status in push_repos:
+                click.echo(f"   • {status.name} ({len(status.changed_files)} changed file(s))")
+
+            if click.confirm(click.style("\n   Execute push for these repositories?", fg="yellow")):
+                actions_to_execute.append(("push", push_repos))
+            click.echo()
+
+        # Option 2: Pull branches
+        if pull_repos:
+            click.echo(click.style("2. PULL - Update branches behind remote", fg="cyan", bold=True))
+            for status in pull_repos:
+                click.echo(f"   • {status.name}")
                 for branch, count in status.behind_branches.items():
-                    click.echo(f"    - {branch}: {count} commit(s) behind")
-            elif action == "prune" and status.merged_branches:
-                for branch in status.merged_branches:
-                    click.echo(f"    - {branch}")
+                    click.echo(f"     - {branch}: {count} commit(s) behind")
 
-        # Confirm action
-        click.echo()
-        if not click.confirm(click.style("Do you want to proceed?", fg="yellow", bold=True)):
-            click.echo(click.style("Action cancelled.", fg="red"))
+            if click.confirm(click.style("\n   Execute pull for these repositories?", fg="yellow")):
+                actions_to_execute.append(("pull", pull_repos))
+            click.echo()
+
+        # Option 3: Prune merged branches
+        if prune_repos:
+            click.echo(click.style("3. PRUNE - Delete merged branches", fg="cyan", bold=True))
+            for status in prune_repos:
+                click.echo(f"   • {status.name}")
+                for branch in status.merged_branches:
+                    click.echo(f"     - {branch}")
+
+            if click.confirm(click.style("\n   Execute prune for these repositories?", fg="yellow")):
+                actions_to_execute.append(("prune", prune_repos))
+            click.echo()
+
+        if not actions_to_execute:
+            click.echo(click.style("No actions selected. Exiting.", fg="yellow"))
             return
 
-        # Execute action
-        click.echo(click.style(f"\n⚙️  Executing {action}...\n", fg="cyan"))
+        # Show summary and final confirmation
+        click.echo(click.style("=== Summary of Actions ===\n", fg="magenta", bold=True))
+        for action_type, repos in actions_to_execute:
+            click.echo(click.style(f"{action_type.upper()}:", fg="cyan", bold=True))
+            for repo in repos:
+                click.echo(f"  • {repo.name}")
+            click.echo()
 
-        if action == "push":
-            results = asyncio.run(execute_action_push(statuses))
-        elif action == "pull":
-            results = asyncio.run(execute_action_pull(statuses))
-        elif action == "prune":
-            results = asyncio.run(execute_action_prune(statuses))
+        if not click.confirm(click.style("Proceed with these actions?", fg="yellow", bold=True)):
+            click.echo(click.style("Actions cancelled.", fg="red"))
+            return
+
+        # Execute selected actions
+        all_results = {}
+
+        for action_type, repos in actions_to_execute:
+            click.echo(click.style(f"\n⚙️  Executing {action_type}...\n", fg="cyan"))
+
+            if action_type == "push":
+                results = asyncio.run(execute_action_push(statuses))
+            elif action_type == "pull":
+                results = asyncio.run(execute_action_pull(statuses))
+            elif action_type == "prune":
+                results = asyncio.run(execute_action_prune(statuses))
+
+            all_results.update(results)
 
         # Display results
         click.echo(click.style("\n=== Results ===\n", fg="green", bold=True))
-        for repo_or_branch, result in results.items():
+        for repo_or_branch, result in all_results.items():
             if "✓" in result:
                 click.echo(click.style(f"{repo_or_branch}: {result}", fg="green"))
             elif "⚠" in result:

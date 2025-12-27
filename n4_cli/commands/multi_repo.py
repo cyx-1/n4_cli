@@ -1,0 +1,463 @@
+"""Multi-repo management - parallel async operations across multiple git repositories."""
+
+import asyncio
+import os
+import subprocess
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import click
+
+
+class RepoStatus:
+    """Status information for a single repository."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.name = path.name
+        self.changed_files: List[str] = []
+        self.behind_branches: Dict[str, int] = {}  # branch_name: commits_behind
+        self.merged_branches: List[str] = []
+        self.current_branch: Optional[str] = None
+        self.has_uncommitted: bool = False
+        self.errors: List[str] = []
+
+    def has_issues(self) -> bool:
+        """Check if repo has any issues to report."""
+        return bool(
+            self.changed_files or
+            self.behind_branches or
+            self.merged_branches or
+            self.has_uncommitted or
+            self.errors
+        )
+
+
+async def run_git_async(command: str, cwd: Path) -> Tuple[int, str, str]:
+    """Run a git command asynchronously and return (returncode, stdout, stderr)."""
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(cwd)
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout.decode().strip(), stderr.decode().strip()
+    except Exception as e:
+        return 1, "", str(e)
+
+
+async def check_repo_status(repo_path: Path) -> RepoStatus:
+    """Check status of a single repository asynchronously."""
+    status = RepoStatus(repo_path)
+
+    # Check if it's a git repo
+    returncode, _, _ = await run_git_async("git rev-parse --git-dir", repo_path)
+    if returncode != 0:
+        status.errors.append("Not a git repository")
+        return status
+
+    # Fetch from remote (with retry logic and exponential backoff)
+    for attempt in range(4):
+        returncode, _, stderr = await run_git_async(
+            "git fetch --all --prune",
+            repo_path
+        )
+        if returncode == 0:
+            break
+        if attempt < 3:
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+    else:
+        status.errors.append(f"Failed to fetch from remote: {stderr}")
+        return status
+
+    # Get current branch
+    returncode, current_branch, _ = await run_git_async(
+        "git rev-parse --abbrev-ref HEAD",
+        repo_path
+    )
+    if returncode == 0 and current_branch:
+        status.current_branch = current_branch
+
+    # Check for uncommitted changes
+    returncode, output, _ = await run_git_async("git status --porcelain", repo_path)
+    if returncode == 0 and output:
+        status.has_uncommitted = True
+        status.changed_files = [line[3:] for line in output.split('\n') if line]
+
+    # Get main/master branch
+    returncode, main_branch, _ = await run_git_async(
+        "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
+        repo_path
+    )
+    if returncode != 0 or not main_branch:
+        # Fallback: check if main or master exists
+        returncode, _, _ = await run_git_async("git rev-parse --verify origin/main", repo_path)
+        main_branch = "main" if returncode == 0 else "master"
+
+    # Get all local branches
+    returncode, branches_output, _ = await run_git_async(
+        "git for-each-ref --format='%(refname:short)' refs/heads/",
+        repo_path
+    )
+    if returncode == 0 and branches_output:
+        local_branches = branches_output.split('\n')
+
+        # Check branches that are behind remote
+        for branch in local_branches:
+            # Check if remote tracking branch exists
+            returncode, _, _ = await run_git_async(
+                f"git rev-parse --verify origin/{branch}",
+                repo_path
+            )
+            if returncode != 0:
+                continue
+
+            # Get commits behind
+            returncode, behind_output, _ = await run_git_async(
+                f"git rev-list --count {branch}..origin/{branch}",
+                repo_path
+            )
+            if returncode == 0 and behind_output and int(behind_output) > 0:
+                status.behind_branches[branch] = int(behind_output)
+
+        # Check for merged branches (exclude main/master and current branch)
+        for branch in local_branches:
+            if branch in [main_branch, status.current_branch]:
+                continue
+
+            # Check if branch is merged into main/master
+            returncode, merge_check, _ = await run_git_async(
+                f"git branch --merged origin/{main_branch} | grep -w '{branch}'",
+                repo_path
+            )
+            if returncode == 0 and merge_check:
+                status.merged_branches.append(branch)
+
+    return status
+
+
+async def check_all_repos(repo_paths: List[Path]) -> List[RepoStatus]:
+    """Check status of all repositories in parallel."""
+    tasks = [check_repo_status(path) for path in repo_paths]
+    return await asyncio.gather(*tasks)
+
+
+def find_git_repos(base_path: Path, recursive: bool = False) -> List[Path]:
+    """Find all git repositories in the base path."""
+    repos = []
+
+    # Check if base_path itself is a git repo
+    if (base_path / ".git").exists():
+        repos.append(base_path)
+        return repos
+
+    # Search for git repos in subdirectories
+    if recursive:
+        for item in base_path.rglob(".git"):
+            if item.is_dir():
+                repos.append(item.parent)
+    else:
+        for item in base_path.iterdir():
+            if item.is_dir() and (item / ".git").exists():
+                repos.append(item)
+
+    return sorted(repos, key=lambda p: p.name)
+
+
+def display_status(statuses: List[RepoStatus], verbose: bool = False):
+    """Display repository statuses."""
+    click.echo(click.style("\n=== Repository Status ===\n", fg="green", bold=True))
+
+    repos_with_issues = [s for s in statuses if s.has_issues()]
+
+    if not repos_with_issues:
+        click.echo(click.style("✓ All repositories are clean and up to date!", fg="green"))
+        return
+
+    for status in statuses:
+        if not verbose and not status.has_issues():
+            continue
+
+        click.echo(click.style(f"📁 {status.name}", fg="cyan", bold=True))
+        if status.current_branch:
+            click.echo(f"   Current branch: {status.current_branch}")
+
+        if status.errors:
+            for error in status.errors:
+                click.echo(click.style(f"   ✗ Error: {error}", fg="red"))
+
+        if status.has_uncommitted and status.changed_files:
+            click.echo(click.style(f"   • Changed files ({len(status.changed_files)}):", fg="yellow"))
+            for file in status.changed_files[:10]:  # Limit to 10 files
+                click.echo(f"     - {file}")
+            if len(status.changed_files) > 10:
+                click.echo(f"     ... and {len(status.changed_files) - 10} more")
+
+        if status.behind_branches:
+            click.echo(click.style("   • Branches behind remote:", fg="yellow"))
+            for branch, count in status.behind_branches.items():
+                click.echo(f"     - {branch}: {count} commit{'s' if count != 1 else ''} behind")
+
+        if status.merged_branches:
+            click.echo(click.style("   • Merged branches (can be deleted):", fg="magenta"))
+            for branch in status.merged_branches:
+                click.echo(f"     - {branch}")
+
+        click.echo()
+
+
+async def execute_action_push(statuses: List[RepoStatus]) -> Dict[str, str]:
+    """Push changes to main/master for repos with uncommitted changes."""
+    results = {}
+
+    for status in statuses:
+        if not status.has_uncommitted or status.errors:
+            continue
+
+        repo_path = status.path
+
+        # Get main/master branch
+        returncode, main_branch, _ = await run_git_async(
+            "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
+            repo_path
+        )
+        if returncode != 0:
+            returncode, _, _ = await run_git_async("git rev-parse --verify origin/main", repo_path)
+            main_branch = "main" if returncode == 0 else "master"
+
+        # Add all changes
+        returncode, _, stderr = await run_git_async("git add -A", repo_path)
+        if returncode != 0:
+            results[status.name] = f"Failed to add files: {stderr}"
+            continue
+
+        # Commit changes
+        returncode, _, stderr = await run_git_async(
+            'git commit -m "Auto-commit: batch update"',
+            repo_path
+        )
+        if returncode != 0:
+            results[status.name] = f"Failed to commit: {stderr}"
+            continue
+
+        # Push with retry logic
+        push_success = False
+        for attempt in range(4):
+            returncode, _, stderr = await run_git_async(
+                f"git push -u origin {status.current_branch or main_branch}",
+                repo_path
+            )
+            if returncode == 0:
+                push_success = True
+                break
+            if attempt < 3:
+                await asyncio.sleep(2 ** (attempt + 1))  # 2s, 4s, 8s
+
+        if push_success:
+            results[status.name] = "✓ Pushed successfully"
+        else:
+            results[status.name] = f"✗ Failed to push: {stderr}"
+
+    return results
+
+
+async def execute_action_pull(statuses: List[RepoStatus]) -> Dict[str, str]:
+    """Pull branches that are behind remote."""
+    results = {}
+
+    for status in statuses:
+        if not status.behind_branches or status.errors:
+            continue
+
+        repo_path = status.path
+
+        for branch in status.behind_branches.keys():
+            # Checkout branch
+            returncode, _, _ = await run_git_async(f"git checkout {branch}", repo_path)
+            if returncode != 0:
+                results[f"{status.name}/{branch}"] = "✗ Failed to checkout"
+                continue
+
+            # Pull with retry logic
+            pull_success = False
+            merge_conflict = False
+            for attempt in range(4):
+                returncode, stdout, stderr = await run_git_async(
+                    f"git pull origin {branch}",
+                    repo_path
+                )
+                if returncode == 0:
+                    pull_success = True
+                    break
+                if "CONFLICT" in stdout or "CONFLICT" in stderr:
+                    merge_conflict = True
+                    break
+                if attempt < 3:
+                    await asyncio.sleep(2 ** (attempt + 1))
+
+            if merge_conflict:
+                results[f"{status.name}/{branch}"] = "⚠ Merge conflict - handle manually"
+            elif pull_success:
+                results[f"{status.name}/{branch}"] = "✓ Pulled successfully"
+            else:
+                results[f"{status.name}/{branch}"] = "✗ Failed to pull"
+
+        # Return to original branch
+        if status.current_branch:
+            await run_git_async(f"git checkout {status.current_branch}", repo_path)
+
+    return results
+
+
+async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
+    """Delete merged branches."""
+    results = {}
+
+    for status in statuses:
+        if not status.merged_branches or status.errors:
+            continue
+
+        repo_path = status.path
+
+        for branch in status.merged_branches:
+            # Delete local branch
+            returncode, _, stderr = await run_git_async(f"git branch -d {branch}", repo_path)
+            if returncode == 0:
+                results[f"{status.name}/{branch}"] = "✓ Deleted locally"
+
+                # Try to delete remote branch if it exists
+                returncode, _, _ = await run_git_async(
+                    f"git push origin --delete {branch}",
+                    repo_path
+                )
+                if returncode == 0:
+                    results[f"{status.name}/{branch}"] += " and remotely"
+            else:
+                results[f"{status.name}/{branch}"] = f"✗ Failed to delete: {stderr}"
+
+    return results
+
+
+@click.command(name="multi-repo")
+@click.option(
+    "--path",
+    "-p",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path.cwd(),
+    help="Base path to search for repositories (default: current directory)"
+)
+@click.option(
+    "--recursive",
+    "-r",
+    is_flag=True,
+    help="Recursively search for git repositories"
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show all repositories, including clean ones"
+)
+@click.option(
+    "--action",
+    type=click.Choice(["push", "pull", "prune"], case_sensitive=False),
+    help="Execute action: push (commit & push changes), pull (update behind branches), prune (delete merged branches)"
+)
+def multi_repo(path: Path, recursive: bool, verbose: bool, action: Optional[str]):
+    """Manage multiple git repositories in parallel.
+
+    This command analyzes all git repositories in the specified path and reports:
+    - Changed files (uncommitted/unstaged)
+    - Branches behind their remote tracking branch
+    - Branches that have been merged to main/master
+
+    Use --action to perform batch operations after reviewing the status.
+
+    Examples:
+      n4_cli multi-repo                    # Check current directory
+      n4_cli multi-repo -p ~/projects -r   # Check all repos recursively
+      n4_cli multi-repo -v                 # Show all repos including clean ones
+      n4_cli multi-repo --action push      # Commit and push changes
+      n4_cli multi-repo --action pull      # Update all behind branches
+      n4_cli multi-repo --action prune     # Delete merged branches
+    """
+    # Find all git repositories
+    click.echo(click.style("🔍 Scanning for git repositories...", fg="cyan"))
+    repos = find_git_repos(path, recursive)
+
+    if not repos:
+        click.echo(click.style("No git repositories found.", fg="yellow"))
+        return
+
+    click.echo(click.style(f"Found {len(repos)} repository/repositories\n", fg="cyan"))
+
+    # Check status of all repos in parallel
+    statuses = asyncio.run(check_all_repos(repos))
+
+    # Display status
+    display_status(statuses, verbose)
+
+    # Execute action if specified
+    if action:
+        click.echo(click.style(f"\n=== Action: {action.upper()} ===\n", fg="yellow", bold=True))
+
+        # Count affected repos
+        if action == "push":
+            affected = [s for s in statuses if s.has_uncommitted and not s.errors]
+            action_desc = "commit and push changes"
+        elif action == "pull":
+            affected = [s for s in statuses if s.behind_branches and not s.errors]
+            action_desc = "pull branches to catch up with remote"
+        elif action == "prune":
+            affected = [s for s in statuses if s.merged_branches and not s.errors]
+            action_desc = "delete merged branches"
+        else:
+            click.echo(click.style("Invalid action", fg="red"))
+            return
+
+        if not affected:
+            click.echo(click.style(f"No repositories require this action.", fg="green"))
+            return
+
+        # Show what will be affected
+        click.echo(f"This will {action_desc} for:\n")
+        for status in affected:
+            click.echo(f"  • {status.name}")
+            if action == "push" and status.changed_files:
+                click.echo(f"    ({len(status.changed_files)} changed file(s))")
+            elif action == "pull" and status.behind_branches:
+                for branch, count in status.behind_branches.items():
+                    click.echo(f"    - {branch}: {count} commit(s) behind")
+            elif action == "prune" and status.merged_branches:
+                for branch in status.merged_branches:
+                    click.echo(f"    - {branch}")
+
+        # Confirm action
+        click.echo()
+        if not click.confirm(click.style("Do you want to proceed?", fg="yellow", bold=True)):
+            click.echo(click.style("Action cancelled.", fg="red"))
+            return
+
+        # Execute action
+        click.echo(click.style(f"\n⚙️  Executing {action}...\n", fg="cyan"))
+
+        if action == "push":
+            results = asyncio.run(execute_action_push(statuses))
+        elif action == "pull":
+            results = asyncio.run(execute_action_pull(statuses))
+        elif action == "prune":
+            results = asyncio.run(execute_action_prune(statuses))
+
+        # Display results
+        click.echo(click.style("\n=== Results ===\n", fg="green", bold=True))
+        for repo_or_branch, result in results.items():
+            if "✓" in result:
+                click.echo(click.style(f"{repo_or_branch}: {result}", fg="green"))
+            elif "⚠" in result:
+                click.echo(click.style(f"{repo_or_branch}: {result}", fg="yellow"))
+            else:
+                click.echo(click.style(f"{repo_or_branch}: {result}", fg="red"))
+
+        click.echo()

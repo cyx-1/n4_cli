@@ -3,13 +3,15 @@
 import sys
 
 import click
+import pyperclip
 
 
 @click.command(name="flatten-lines-add-quotes")
 @click.argument("file_path", required=False, type=click.Path(exists=True))
 @click.option("--in-place", "-i", is_flag=True, help="Modify file in place (default when file is provided)")
 @click.option("--output", "-o", type=click.Path(), help="Output file path (default: stdout)")
-def flatten_lines_add_quotes(file_path, in_place, output):
+@click.option("--clipboard", "-c", is_flag=True, help="Read from and write to clipboard")
+def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
     """Flatten multiple lines into single line with quoted, comma-separated values.
 
     Converts:
@@ -20,7 +22,7 @@ def flatten_lines_add_quotes(file_path, in_place, output):
     To:
       'line1','line2','line3',
 
-    Can be used in two modes:
+    Can be used in three modes:
 
     1. File mode (in-place editing):
        n4_cli flatten-lines-add-quotes myfile.txt
@@ -29,12 +31,17 @@ def flatten_lines_add_quotes(file_path, in_place, output):
        cat myfile.txt | n4_cli flatten-lines-add-quotes
        cat myfile.txt | n4_cli flatten-lines-add-quotes > output.txt
 
+    3. Clipboard mode:
+       n4_cli flatten-lines-add-quotes --clipboard
+       n4_cli flatten-lines-add-quotes -c
+
     Examples:
       n4_cli flatten-lines-add-quotes data.txt              # Flatten file in place
       cat data.txt | n4_cli flatten-lines-add-quotes        # Flatten and print to stdout
+      n4_cli flatten-lines-add-quotes -c                    # Flatten clipboard content
       n4_cli flatten-lines-add-quotes data.txt -o out.txt   # Flatten to different file
     """
-    # Determine mode: file or stdin
+    # Determine mode: file, stdin, or clipboard
     if file_path:
         # File mode
         try:
@@ -63,15 +70,8 @@ def flatten_lines_add_quotes(file_path, in_place, output):
             click.echo(click.style(f"Error processing file: {e}", fg="red"), err=True)
             raise click.Abort()
 
-    else:
+    elif not sys.stdin.isatty():
         # Pipe mode - read from stdin
-        if sys.stdin.isatty():
-            click.echo(click.style("Error: No input provided. Provide a file path or pipe input.", fg="red"), err=True)
-            click.echo("\nUsage:")
-            click.echo("  n4_cli flatten-lines-add-quotes <file>           # Flatten file in place")
-            click.echo("  cat file.txt | n4_cli flatten-lines-add-quotes   # Flatten from stdin")
-            raise click.Abort()
-
         try:
             # Read from stdin
             content = sys.stdin.readlines()
@@ -90,4 +90,33 @@ def flatten_lines_add_quotes(file_path, in_place, output):
 
         except Exception as e:
             click.echo(click.style(f"Error processing stdin: {e}", fg="red"), err=True)
+            raise click.Abort()
+
+    else:
+        # Clipboard mode
+        try:
+            clipboard_content = pyperclip.paste()
+
+            if not clipboard_content:
+                click.echo(click.style("Clipboard is empty", fg="yellow"))
+                return
+
+            lines = clipboard_content.split('\n')
+
+            # Process lines: format with quotes
+            flattened = ''.join(f"'{line}',".replace('\n', '') for line in lines)
+
+            if output:
+                with open(output, 'w') as f:
+                    f.write(flattened)
+                click.echo(click.style(f"✓ Flattened {len(lines)} lines from clipboard to: {output}", fg="green"))
+            else:
+                # Write back to clipboard
+                pyperclip.copy(flattened)
+                click.echo(click.style(f"✓ Flattened {len(lines)} lines", fg="green"))
+                click.echo(click.style("Result copied to clipboard", fg="cyan"))
+                click.echo(click.style(f"Preview: {flattened[:100]}{'...' if len(flattened) > 100 else ''}", fg="white"))
+
+        except Exception as e:
+            click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)
             raise click.Abort()

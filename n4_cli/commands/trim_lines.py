@@ -3,16 +3,18 @@
 import sys
 
 import click
+import pyperclip
 
 
 @click.command(name="trim-lines")
 @click.argument("file_path", required=False, type=click.Path(exists=True))
 @click.option("--in-place", "-i", is_flag=True, help="Modify file in place (default when file is provided)")
 @click.option("--output", "-o", type=click.Path(), help="Output file path (default: stdout)")
-def trim_lines(file_path, in_place, output):
+@click.option("--clipboard", "-c", is_flag=True, help="Read from and write to clipboard")
+def trim_lines(file_path, in_place, output, clipboard):
     """Remove leading and trailing whitespace from each line.
 
-    Can be used in two modes:
+    Can be used in three modes:
 
     1. File mode (in-place editing):
        n4_cli trim-lines myfile.txt
@@ -21,12 +23,17 @@ def trim_lines(file_path, in_place, output):
        cat myfile.txt | n4_cli trim-lines
        cat myfile.txt | n4_cli trim-lines > output.txt
 
+    3. Clipboard mode:
+       n4_cli trim-lines --clipboard
+       n4_cli trim-lines -c
+
     Examples:
       n4_cli trim-lines data.txt              # Trim file in place
       cat data.txt | n4_cli trim-lines        # Trim and print to stdout
+      n4_cli trim-lines -c                    # Trim clipboard content
       n4_cli trim-lines data.txt -o out.txt   # Trim to different file
     """
-    # Determine mode: file or stdin
+    # Determine mode: file, stdin, or clipboard
     if file_path:
         # File mode
         try:
@@ -58,15 +65,8 @@ def trim_lines(file_path, in_place, output):
             click.echo(click.style(f"Error processing file: {e}", fg="red"), err=True)
             raise click.Abort()
 
-    else:
+    elif not sys.stdin.isatty():
         # Pipe mode - read from stdin
-        if sys.stdin.isatty():
-            click.echo(click.style("Error: No input provided. Provide a file path or pipe input.", fg="red"), err=True)
-            click.echo("\nUsage:")
-            click.echo("  n4_cli trim-lines <file>           # Trim file in place")
-            click.echo("  cat file.txt | n4_cli trim-lines   # Trim from stdin")
-            raise click.Abort()
-
         try:
             # Read from stdin
             lines = sys.stdin.readlines()
@@ -87,4 +87,34 @@ def trim_lines(file_path, in_place, output):
 
         except Exception as e:
             click.echo(click.style(f"Error processing stdin: {e}", fg="red"), err=True)
+            raise click.Abort()
+
+    else:
+        # Clipboard mode
+        try:
+            clipboard_content = pyperclip.paste()
+
+            if not clipboard_content:
+                click.echo(click.style("Clipboard is empty", fg="yellow"))
+                return
+
+            lines = clipboard_content.split('\n')
+
+            # Trim each line
+            trimmed_lines = [line.strip() for line in lines]
+
+            result = '\n'.join(trimmed_lines)
+
+            if output:
+                with open(output, 'w') as f:
+                    f.write(result)
+                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines from clipboard to: {output}", fg="green"))
+            else:
+                # Write back to clipboard
+                pyperclip.copy(result)
+                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines", fg="green"))
+                click.echo(click.style("Result copied to clipboard", fg="cyan"))
+
+        except Exception as e:
+            click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)
             raise click.Abort()

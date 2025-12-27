@@ -144,12 +144,13 @@ def remove_blanks(file_path, in_place, output, clipboard):
                 click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"))
                 click.echo(click.style(f"  Saved to: {output}", fg="green"))
             else:
-                # Write back to clipboard
+                # Write back to clipboard and print to stdout
                 pyperclip.copy(result)
                 original_count = len(lines)
                 removed_count = original_count - len(non_blank_lines)
-                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"))
-                click.echo(click.style("Result copied to clipboard", fg="cyan"))
+                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"), err=True)
+                click.echo(click.style("Result copied to clipboard", fg="cyan"), err=True)
+                click.echo(result)
 
         except Exception as e:
             click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)

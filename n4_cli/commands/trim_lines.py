@@ -110,10 +110,11 @@ def trim_lines(file_path, in_place, output, clipboard):
                     f.write(result)
                 click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines from clipboard to: {output}", fg="green"))
             else:
-                # Write back to clipboard
+                # Write back to clipboard and print to stdout
                 pyperclip.copy(result)
-                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines", fg="green"))
-                click.echo(click.style("Result copied to clipboard", fg="cyan"))
+                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines", fg="green"), err=True)
+                click.echo(click.style("Result copied to clipboard", fg="cyan"), err=True)
+                click.echo(result)
 
         except Exception as e:
             click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)

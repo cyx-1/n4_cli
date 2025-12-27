@@ -111,11 +111,11 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
                     f.write(flattened)
                 click.echo(click.style(f"[OK] Flattened {len(lines)} lines from clipboard to: {output}", fg="green"))
             else:
-                # Write back to clipboard
+                # Write back to clipboard and print to stdout
                 pyperclip.copy(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(lines)} lines", fg="green"))
-                click.echo(click.style("Result copied to clipboard", fg="cyan"))
-                click.echo(click.style(f"Preview: {flattened[:100]}{'...' if len(flattened) > 100 else ''}", fg="white"))
+                click.echo(click.style(f"[OK] Flattened {len(lines)} lines", fg="green"), err=True)
+                click.echo(click.style("Result copied to clipboard", fg="cyan"), err=True)
+                click.echo(flattened)
 
         except Exception as e:
             click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)

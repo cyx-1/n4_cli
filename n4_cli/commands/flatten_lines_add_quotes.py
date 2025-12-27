@@ -56,12 +56,12 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
                 # Write to specified output file
                 with open(output, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"✓ Flattened {len(content)} lines to: {output}", fg="green"))
+                click.echo(click.style(f"[OK] Flattened {len(content)} lines to: {output}", fg="green"))
             elif in_place or (not output and not in_place):
                 # Default: in-place editing when file is provided
                 with open(file_path, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"✓ Flattened {len(content)} lines in: {file_path}", fg="green"))
+                click.echo(click.style(f"[OK] Flattened {len(content)} lines in: {file_path}", fg="green"))
             else:
                 # Output to stdout
                 click.echo(flattened)
@@ -83,7 +83,7 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
             if output:
                 with open(output, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"✓ Flattened {len(content)} lines to: {output}", fg="green"), err=True)
+                click.echo(click.style(f"[OK] Flattened {len(content)} lines to: {output}", fg="green"), err=True)
             else:
                 # Write to stdout (for piping)
                 click.echo(flattened)
@@ -109,11 +109,11 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
             if output:
                 with open(output, 'w') as f:
                     f.write(flattened)
-                click.echo(click.style(f"✓ Flattened {len(lines)} lines from clipboard to: {output}", fg="green"))
+                click.echo(click.style(f"[OK] Flattened {len(lines)} lines from clipboard to: {output}", fg="green"))
             else:
                 # Write back to clipboard
                 pyperclip.copy(flattened)
-                click.echo(click.style(f"✓ Flattened {len(lines)} lines", fg="green"))
+                click.echo(click.style(f"[OK] Flattened {len(lines)} lines", fg="green"))
                 click.echo(click.style("Result copied to clipboard", fg="cyan"))
                 click.echo(click.style(f"Preview: {flattened[:100]}{'...' if len(flattened) > 100 else ''}", fg="white"))
 

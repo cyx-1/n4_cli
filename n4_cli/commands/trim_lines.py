@@ -49,13 +49,13 @@ def trim_lines(file_path, in_place, output, clipboard):
                 with open(output, 'w') as f:
                     for line in trimmed_lines:
                         f.write(f'{line}\n')
-                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines to: {output}", fg="green"))
+                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines to: {output}", fg="green"))
             elif in_place or (not output and not in_place):
                 # Default: in-place editing when file is provided
                 with open(file_path, 'w') as f:
                     for line in trimmed_lines:
                         f.write(f'{line}\n')
-                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines in: {file_path}", fg="green"))
+                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines in: {file_path}", fg="green"))
             else:
                 # Output to stdout
                 for line in trimmed_lines:
@@ -79,7 +79,7 @@ def trim_lines(file_path, in_place, output, clipboard):
                 with open(output, 'w') as f:
                     for line in trimmed_lines:
                         f.write(f'{line}\n')
-                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines to: {output}", fg="green"), err=True)
+                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines to: {output}", fg="green"), err=True)
             else:
                 # Write to stdout (for piping)
                 for line in trimmed_lines:
@@ -108,11 +108,11 @@ def trim_lines(file_path, in_place, output, clipboard):
             if output:
                 with open(output, 'w') as f:
                     f.write(result)
-                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines from clipboard to: {output}", fg="green"))
+                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines from clipboard to: {output}", fg="green"))
             else:
                 # Write back to clipboard
                 pyperclip.copy(result)
-                click.echo(click.style(f"✓ Trimmed {len(trimmed_lines)} lines", fg="green"))
+                click.echo(click.style(f"[OK] Trimmed {len(trimmed_lines)} lines", fg="green"))
                 click.echo(click.style("Result copied to clipboard", fg="cyan"))
 
         except Exception as e:

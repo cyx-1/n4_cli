@@ -206,7 +206,7 @@ Note: Paste manually (Ctrl+V / Cmd+V) to see additional system-level formats lik
             click.echo(click.style("Clipboard is empty", fg="yellow"))
 
         webbrowser.open(f"file://{temp_html_path}")
-        click.echo(click.style(f"✓ Viewer opened in browser", fg="green"))
+        click.echo(click.style(f"[OK] Viewer opened in browser", fg="green"))
         click.echo(click.style("\nYou can paste (Ctrl+V / Cmd+V) to see system-level formats like images.", fg="yellow"))
     except Exception as e:
         click.echo(click.style(f"Error opening browser: {e}", fg="red"), err=True)

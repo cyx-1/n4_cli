@@ -91,7 +91,7 @@ def git_merge_latest(dry_run):
         click.echo(click.style("Error: Could not find latest commit", fg="red"), err=True)
         raise click.Abort()
 
-    click.echo(click.style(f"\n✓ Latest commit: {latest_commit}", fg="green"))
+    click.echo(click.style(f"\n[OK] Latest commit: {latest_commit}", fg="green"))
 
     # Step 5: Merge to latest commit
     run_git_command(f"git merge {latest_commit}", f"Merge to {latest_commit}")
@@ -100,4 +100,4 @@ def git_merge_latest(dry_run):
     run_git_command("git push origin main", "Push main branch to remote")
 
     click.echo()
-    click.echo(click.style("✓ Successfully merged and pushed to main", fg="green", bold=True))
+    click.echo(click.style("[OK] Successfully merged and pushed to main", fg="green", bold=True))

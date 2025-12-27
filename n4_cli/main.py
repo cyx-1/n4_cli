@@ -124,7 +124,7 @@ def get_matching_commands(commands, query):
     return [(name, info) for name, info, _ in matches]
 
 
-@click.group(invoke_without_command=True)
+@click.group(invoke_without_command=True, context_settings={'max_content_width': 120})
 @click.pass_context
 def cli(ctx):
     """n4_cli - A modular command-line tool with interactive command selection.

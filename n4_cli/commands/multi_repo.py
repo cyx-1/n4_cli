@@ -123,16 +123,23 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
                 status.behind_branches[branch] = int(behind_output)
 
         # Check for merged branches (exclude main/master and current branch)
-        for branch in local_branches:
-            if branch in [main_branch, status.current_branch]:
-                continue
+        # Get all branches merged into origin/main or origin/master
+        returncode, merged_output, _ = await run_git_async(
+            f"git branch --merged origin/{main_branch}",
+            repo_path
+        )
 
-            # Check if branch is merged into main/master
-            returncode, merge_check, _ = await run_git_async(
-                f"git branch --merged origin/{main_branch} | grep -w '{branch}'",
-                repo_path
-            )
-            if returncode == 0 and merge_check:
+        if returncode == 0 and merged_output:
+            # Parse the output and filter branches
+            for line in merged_output.split('\n'):
+                branch = line.strip().lstrip('* ').strip()
+                if not branch:
+                    continue
+
+                # Exclude main, master, and current branch
+                if branch in ['main', 'master', status.current_branch]:
+                    continue
+
                 status.merged_branches.append(branch)
 
     return status

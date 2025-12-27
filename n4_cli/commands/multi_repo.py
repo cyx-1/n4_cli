@@ -122,8 +122,8 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
             if returncode == 0 and behind_output and int(behind_output) > 0:
                 status.behind_branches[branch] = int(behind_output)
 
-        # Check for merged branches (exclude main/master and current branch)
-        # Get all branches merged into origin/main or origin/master
+        # Check for merged branches (both local and remote)
+        # Get local branches merged into origin/main or origin/master
         returncode, merged_output, _ = await run_git_async(
             f"git branch --merged origin/{main_branch}",
             repo_path
@@ -141,6 +141,27 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
                     continue
 
                 status.merged_branches.append(branch)
+
+        # Get remote branches merged into origin/main or origin/master
+        returncode, remote_merged_output, _ = await run_git_async(
+            f"git branch -r --merged origin/{main_branch}",
+            repo_path
+        )
+
+        if returncode == 0 and remote_merged_output:
+            # Parse the output and filter remote branches
+            for line in remote_merged_output.split('\n'):
+                branch = line.strip().lstrip('* ').strip()
+                if not branch:
+                    continue
+
+                # Exclude origin/main, origin/master, and origin/HEAD
+                if branch in [f'origin/{main_branch}', 'origin/main', 'origin/master', 'origin/HEAD']:
+                    continue
+
+                # Only include origin/ branches (not other remotes)
+                if branch.startswith('origin/'):
+                    status.merged_branches.append(branch)
 
     return status
 
@@ -319,7 +340,7 @@ async def execute_action_pull(statuses: List[RepoStatus]) -> Dict[str, str]:
 
 
 async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
-    """Delete merged branches."""
+    """Delete merged branches (both local and remote)."""
     results = {}
 
     for status in statuses:
@@ -329,20 +350,38 @@ async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
         repo_path = status.path
 
         for branch in status.merged_branches:
-            # Delete local branch
-            returncode, _, stderr = await run_git_async(f"git branch -d {branch}", repo_path)
-            if returncode == 0:
-                results[f"{status.name}/{branch}"] = "✓ Deleted locally"
+            # Check if this is a remote branch
+            if branch.startswith('origin/'):
+                # Extract branch name without origin/ prefix
+                branch_name = branch.replace('origin/', '', 1)
 
-                # Try to delete remote branch if it exists
-                returncode, _, _ = await run_git_async(
-                    f"git push origin --delete {branch}",
+                # Delete from remote
+                returncode, _, stderr = await run_git_async(
+                    f"git push origin --delete {branch_name}",
                     repo_path
                 )
                 if returncode == 0:
-                    results[f"{status.name}/{branch}"] += " and remotely"
+                    results[f"{status.name}/{branch}"] = "✓ Deleted from remote"
+
+                    # Clean up the remote tracking reference
+                    await run_git_async(f"git branch -d -r {branch}", repo_path)
+                else:
+                    results[f"{status.name}/{branch}"] = f"✗ Failed to delete from remote: {stderr}"
             else:
-                results[f"{status.name}/{branch}"] = f"✗ Failed to delete: {stderr}"
+                # Delete local branch
+                returncode, _, stderr = await run_git_async(f"git branch -d {branch}", repo_path)
+                if returncode == 0:
+                    results[f"{status.name}/{branch}"] = "✓ Deleted locally"
+
+                    # Try to delete remote branch if it exists
+                    returncode, _, _ = await run_git_async(
+                        f"git push origin --delete {branch}",
+                        repo_path
+                    )
+                    if returncode == 0:
+                        results[f"{status.name}/{branch}"] += " and remotely"
+                else:
+                    results[f"{status.name}/{branch}"] = f"✗ Failed to delete: {stderr}"
 
     return results
 

@@ -17,6 +17,7 @@ class RepoStatus:
         self.name = path.name
         self.changed_files: List[str] = []
         self.behind_branches: Dict[str, int] = {}  # branch_name: commits_behind
+        self.ahead_of_remote: int = 0  # commits ahead of upstream
         self.merged_branches: List[str] = []
         self.current_branch: Optional[str] = None
         self.remote_url: Optional[str] = None
@@ -28,6 +29,7 @@ class RepoStatus:
         return bool(
             self.changed_files or
             self.behind_branches or
+            self.ahead_of_remote or
             self.merged_branches or
             self.has_uncommitted or
             self.errors
@@ -88,6 +90,22 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
     )
     if returncode == 0 and remote_url:
         status.remote_url = remote_url
+
+    # Check for unpushed commits (commits ahead of upstream)
+    if status.current_branch:
+        # Check if current branch has upstream
+        returncode, _, _ = await run_git_async(
+            f"git rev-parse --abbrev-ref {status.current_branch}@{{upstream}}",
+            repo_path
+        )
+        if returncode == 0:
+            # Get commits ahead of upstream
+            returncode, ahead_output, _ = await run_git_async(
+                f"git rev-list --count @{{upstream}}..HEAD",
+                repo_path
+            )
+            if returncode == 0 and ahead_output and int(ahead_output) > 0:
+                status.ahead_of_remote = int(ahead_output)
 
     # Check for uncommitted changes
     returncode, output, _ = await run_git_async("git status --porcelain", repo_path)
@@ -237,6 +255,9 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
                 click.echo(f"     - {file}")
             if len(status.changed_files) > 10:
                 click.echo(f"     ... and {len(status.changed_files) - 10} more")
+
+        if status.ahead_of_remote:
+            click.echo(click.style(f"   • Unpushed commits: {status.ahead_of_remote} commit{'s' if status.ahead_of_remote != 1 else ''} ahead of remote", fg="yellow"))
 
         if status.behind_branches:
             click.echo(click.style("   • Branches behind remote:", fg="yellow"))
@@ -401,7 +422,7 @@ async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
     return results
 
 
-@click.command(name="multi-repo")
+@click.command(name="git")
 @click.option(
     "--path",
     "-p",
@@ -432,16 +453,17 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
 
     This command analyzes all git repositories in the specified path and reports:
     - Changed files (uncommitted/unstaged)
+    - Unpushed commits (commits ahead of remote)
     - Branches behind their remote tracking branch
     - Branches that have been merged to main/master
 
     Use --action for interactive mode to select and execute batch operations.
 
     Examples:
-      n4_cli multi-repo                    # Check current directory
-      n4_cli multi-repo -p ~/projects -r   # Check all repos recursively
-      n4_cli multi-repo -v                 # Show all repos including clean ones
-      n4_cli multi-repo --action           # Interactive mode to execute actions
+      n4 git                    # Check current directory
+      n4 git -p ~/projects -r   # Check all repos recursively
+      n4 git -v                 # Show all repos including clean ones
+      n4 git --action           # Interactive mode to execute actions
     """
     # Find all git repositories
     click.echo(click.style("🔍 Scanning for git repositories...", fg="cyan"))

@@ -10,6 +10,131 @@ import click
 import questionary
 
 
+def select_repos_interactive(repos: List[Path], prompt: str = "Select repositories") -> List[Path]:
+    """Interactive repository selection with number-based input.
+
+    Allows users to:
+    - Press Enter for all repos (default)
+    - Enter numbers: 1,3,5 or 1-3
+    - Type 'all' for all repos
+    """
+    if len(repos) <= 1:
+        return repos
+
+    # Display numbered list
+    click.echo(click.style(f"\n{prompt}:", fg="cyan", bold=True))
+    for i, repo in enumerate(repos, 1):
+        click.echo(f"  {i}. {repo.name} ({repo})")
+
+    click.echo(click.style("\nEnter selection:", fg="yellow"))
+    click.echo("  • Press Enter for all (default)")
+    click.echo("  • Enter numbers: 1,3,5")
+    click.echo("  • Enter ranges: 1-3")
+    click.echo("  • Type 'all' for all repositories")
+
+    selection = questionary.text(
+        "",
+        default="all"
+    ).ask()
+
+    if not selection or selection.strip().lower() == "all":
+        return repos
+
+    # Parse selection
+    selected_indices = set()
+    parts = selection.split(',')
+
+    try:
+        for part in parts:
+            part = part.strip()
+            if '-' in part:
+                # Range like "1-3"
+                start, end = part.split('-')
+                start_idx = int(start.strip())
+                end_idx = int(end.strip())
+                for idx in range(start_idx, end_idx + 1):
+                    if 1 <= idx <= len(repos):
+                        selected_indices.add(idx - 1)
+            else:
+                # Single number
+                idx = int(part)
+                if 1 <= idx <= len(repos):
+                    selected_indices.add(idx - 1)
+    except ValueError:
+        click.echo(click.style("Invalid input. Selecting all repositories.", fg="yellow"))
+        return repos
+
+    if not selected_indices:
+        click.echo(click.style("No valid selection. Selecting all repositories.", fg="yellow"))
+        return repos
+
+    selected_repos = [repos[i] for i in sorted(selected_indices)]
+    click.echo(click.style(f"\n✓ Selected {len(selected_repos)} repository/repositories\n", fg="green"))
+
+    return selected_repos
+
+
+def select_repo_statuses_interactive(statuses: List["RepoStatus"], prompt: str = "Select repositories") -> List["RepoStatus"]:
+    """Interactive RepoStatus selection with number-based input."""
+    if len(statuses) <= 1:
+        return statuses
+
+    # Display numbered list
+    click.echo(click.style(f"\n{prompt}:", fg="cyan", bold=True))
+    for i, status in enumerate(statuses, 1):
+        click.echo(f"  {i}. {status.name}")
+
+    click.echo(click.style("\nEnter selection:", fg="yellow"))
+    click.echo("  • Press Enter for all (default)")
+    click.echo("  • Enter numbers: 1,3,5")
+    click.echo("  • Enter ranges: 1-3")
+    click.echo("  • Type 'all' for all repositories")
+    click.echo("  • Type 'none' or '0' to skip")
+
+    selection = questionary.text(
+        "",
+        default="all"
+    ).ask()
+
+    if not selection or selection.strip().lower() in ["none", "0"]:
+        return []
+
+    if selection.strip().lower() == "all":
+        return statuses
+
+    # Parse selection
+    selected_indices = set()
+    parts = selection.split(',')
+
+    try:
+        for part in parts:
+            part = part.strip()
+            if '-' in part:
+                # Range like "1-3"
+                start, end = part.split('-')
+                start_idx = int(start.strip())
+                end_idx = int(end.strip())
+                for idx in range(start_idx, end_idx + 1):
+                    if 1 <= idx <= len(statuses):
+                        selected_indices.add(idx - 1)
+            else:
+                # Single number
+                idx = int(part)
+                if 1 <= idx <= len(statuses):
+                    selected_indices.add(idx - 1)
+    except ValueError:
+        click.echo(click.style("Invalid input. Selecting all repositories.", fg="yellow"))
+        return statuses
+
+    if not selected_indices:
+        return []
+
+    selected_statuses = [statuses[i] for i in sorted(selected_indices)]
+    click.echo(click.style(f"\n✓ Selected {len(selected_statuses)} repository/repositories\n", fg="green"))
+
+    return selected_statuses
+
+
 class RepoStatus:
     """Status information for a single repository."""
 
@@ -474,26 +599,10 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
         click.echo(click.style("No git repositories found.", fg="yellow"))
         return
 
-    click.echo(click.style(f"Found {len(repos)} repository/repositories\n", fg="cyan"))
+    click.echo(click.style(f"Found {len(repos)} repository/repositories", fg="cyan"))
 
-    # Interactive multi-select for repositories
-    if len(repos) > 1:
-        choices = [
-            questionary.Choice(title=f"{repo.name} ({repo})", value=repo, checked=True)
-            for repo in repos
-        ]
-
-        selected_repos = questionary.checkbox(
-            "Select repositories to check (Space to select/deselect, Enter to confirm):",
-            choices=choices
-        ).ask()
-
-        if not selected_repos:
-            click.echo(click.style("No repositories selected. Exiting.", fg="yellow"))
-            return
-
-        repos = selected_repos
-        click.echo(click.style(f"\n✓ Selected {len(repos)} repository/repositories\n", fg="green"))
+    # Interactive repository selection
+    repos = select_repos_interactive(repos, "Select repositories to check")
 
     # Check status of all repos in parallel
     statuses = asyncio.run(check_all_repos(repos))
@@ -522,35 +631,41 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
         # Option 1: Push changes
         if push_repos:
             click.echo(click.style("1. PUSH - Commit and push changes", fg="cyan", bold=True))
-            for status in push_repos:
-                click.echo(f"   • {status.name} ({len(status.changed_files)} changed file(s))")
+            for i, status in enumerate(push_repos, 1):
+                click.echo(f"   {i}. {status.name} ({len(status.changed_files)} changed file(s))")
 
-            if click.confirm(click.style("\n   Execute push for these repositories?", fg="yellow")):
-                actions_to_execute.append(("push", push_repos))
+            if click.confirm(click.style("\n   Execute push action?", fg="yellow")):
+                selected_push = select_repo_statuses_interactive(push_repos, "Select repositories for PUSH")
+                if selected_push:
+                    actions_to_execute.append(("push", selected_push))
             click.echo()
 
         # Option 2: Pull branches
         if pull_repos:
             click.echo(click.style("2. PULL - Update branches behind remote", fg="cyan", bold=True))
-            for status in pull_repos:
-                click.echo(f"   • {status.name}")
+            for i, status in enumerate(pull_repos, 1):
+                click.echo(f"   {i}. {status.name}")
                 for branch, count in status.behind_branches.items():
-                    click.echo(f"     - {branch}: {count} commit(s) behind")
+                    click.echo(f"      - {branch}: {count} commit(s) behind")
 
-            if click.confirm(click.style("\n   Execute pull for these repositories?", fg="yellow")):
-                actions_to_execute.append(("pull", pull_repos))
+            if click.confirm(click.style("\n   Execute pull action?", fg="yellow")):
+                selected_pull = select_repo_statuses_interactive(pull_repos, "Select repositories for PULL")
+                if selected_pull:
+                    actions_to_execute.append(("pull", selected_pull))
             click.echo()
 
         # Option 3: Prune merged branches
         if prune_repos:
             click.echo(click.style("3. PRUNE - Delete merged branches", fg="cyan", bold=True))
-            for status in prune_repos:
-                click.echo(f"   • {status.name}")
+            for i, status in enumerate(prune_repos, 1):
+                click.echo(f"   {i}. {status.name}")
                 for branch in status.merged_branches:
-                    click.echo(f"     - {branch}")
+                    click.echo(f"      - {branch}")
 
-            if click.confirm(click.style("\n   Execute prune for these repositories?", fg="yellow")):
-                actions_to_execute.append(("prune", prune_repos))
+            if click.confirm(click.style("\n   Execute prune action?", fg="yellow")):
+                selected_prune = select_repo_statuses_interactive(prune_repos, "Select repositories for PRUNE")
+                if selected_prune:
+                    actions_to_execute.append(("prune", selected_prune))
             click.echo()
 
         if not actions_to_execute:

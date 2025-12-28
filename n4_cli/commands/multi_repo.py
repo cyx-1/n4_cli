@@ -332,7 +332,10 @@ async def check_all_repos(repo_paths: List[Path]) -> List[RepoStatus]:
 
 
 def find_git_repos(base_path: Path, recursive: bool = False) -> List[Path]:
-    """Find all git repositories in the base path."""
+    """Find all git repositories in the base path.
+
+    When recursive=True, stops recursing once a git repo is found.
+    """
     repos = []
 
     # Check if base_path itself is a git repo
@@ -342,9 +345,26 @@ def find_git_repos(base_path: Path, recursive: bool = False) -> List[Path]:
 
     # Search for git repos in subdirectories
     if recursive:
-        for item in base_path.rglob(".git"):
-            if item.is_dir():
-                repos.append(item.parent)
+        # Manual recursive walk that stops at git repos
+        def _recursive_search(path: Path):
+            try:
+                for item in path.iterdir():
+                    if not item.is_dir():
+                        continue
+
+                    # Check if this directory is a git repo
+                    if (item / ".git").exists():
+                        repos.append(item)
+                        # Don't recurse further into this git repo
+                        continue
+
+                    # Recurse into subdirectories
+                    _recursive_search(item)
+            except PermissionError:
+                # Skip directories we can't access
+                pass
+
+        _recursive_search(base_path)
     else:
         for item in base_path.iterdir():
             if item.is_dir() and (item / ".git").exists():

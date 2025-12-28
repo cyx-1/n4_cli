@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import click
+import questionary
 
 
 class RepoStatus:
@@ -474,6 +475,25 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
         return
 
     click.echo(click.style(f"Found {len(repos)} repository/repositories\n", fg="cyan"))
+
+    # Interactive multi-select for repositories
+    if len(repos) > 1:
+        choices = [
+            questionary.Choice(title=f"{repo.name} ({repo})", value=repo, checked=True)
+            for repo in repos
+        ]
+
+        selected_repos = questionary.checkbox(
+            "Select repositories to check (Space to select/deselect, Enter to confirm):",
+            choices=choices
+        ).ask()
+
+        if not selected_repos:
+            click.echo(click.style("No repositories selected. Exiting.", fg="yellow"))
+            return
+
+        repos = selected_repos
+        click.echo(click.style(f"\n✓ Selected {len(repos)} repository/repositories\n", fg="green"))
 
     # Check status of all repos in parallel
     statuses = asyncio.run(check_all_repos(repos))

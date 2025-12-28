@@ -19,6 +19,7 @@ class RepoStatus:
         self.behind_branches: Dict[str, int] = {}  # branch_name: commits_behind
         self.merged_branches: List[str] = []
         self.current_branch: Optional[str] = None
+        self.remote_url: Optional[str] = None
         self.has_uncommitted: bool = False
         self.errors: List[str] = []
 
@@ -79,6 +80,14 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
     )
     if returncode == 0 and current_branch:
         status.current_branch = current_branch
+
+    # Get remote URL
+    returncode, remote_url, _ = await run_git_async(
+        "git remote get-url origin",
+        repo_path
+    )
+    if returncode == 0 and remote_url:
+        status.remote_url = remote_url
 
     # Check for uncommitted changes
     returncode, output, _ = await run_git_async("git status --porcelain", repo_path)
@@ -215,6 +224,8 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
         click.echo(click.style(f"📁 {status.name}", fg="cyan", bold=True))
         if status.current_branch:
             click.echo(f"   Current branch: {status.current_branch}")
+        if status.remote_url:
+            click.echo(f"   Remote: {status.remote_url}")
 
         if status.errors:
             for error in status.errors:

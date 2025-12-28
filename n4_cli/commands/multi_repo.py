@@ -560,7 +560,8 @@ async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
     "--recursive",
     "-r",
     is_flag=True,
-    help="Recursively search for git repositories"
+    default=True,
+    help="Recursively search for git repositories (default: True, use --no-recursive to disable)"
 )
 @click.option(
     "--verbose",
@@ -583,13 +584,15 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
     - Branches behind their remote tracking branch
     - Branches that have been merged to main/master
 
+    By default, searches recursively for all git repositories in subdirectories.
     Use --action for interactive mode to select and execute batch operations.
 
     Examples:
-      n4 git                    # Check current directory
-      n4 git -p ~/projects -r   # Check all repos recursively
-      n4 git -v                 # Show all repos including clean ones
-      n4 git --action           # Interactive mode to execute actions
+      n4 git                       # Check current directory recursively
+      n4 git -p ~/projects         # Check ~/projects recursively
+      n4 git --no-recursive        # Check only current directory (no subdirs)
+      n4 git -v                    # Show all repos including clean ones
+      n4 git --action              # Interactive mode to execute actions
     """
     # Find all git repositories
     click.echo(click.style("🔍 Scanning for git repositories...", fg="cyan"))

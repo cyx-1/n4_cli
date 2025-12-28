@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import click
 import questionary
+from rich.console import Console
+from rich.table import Table
 
 
 def select_repos_interactive(repos: List[Path], prompt: str = "Select repositories") -> List[Path]:
@@ -352,50 +354,89 @@ def find_git_repos(base_path: Path, recursive: bool = False) -> List[Path]:
 
 
 def display_status(statuses: List[RepoStatus], verbose: bool = False):
-    """Display repository statuses."""
-    click.echo(click.style("\n=== Repository Status ===\n", fg="green", bold=True))
+    """Display repository statuses using a rich table."""
+    console = Console()
 
     repos_with_issues = [s for s in statuses if s.has_issues()]
 
-    if not repos_with_issues:
-        click.echo(click.style("✓ All repositories are clean and up to date!", fg="green"))
+    if not repos_with_issues and not verbose:
+        console.print("\n✓ All repositories are clean and up to date!", style="bold green")
         return
 
+    # Create table
+    table = Table(title="\n📦 Repository Status", show_header=True, header_style="bold cyan")
+
+    table.add_column("Repository", style="cyan", no_wrap=True)
+    table.add_column("Branch", style="blue")
+    table.add_column("Status", style="white")
+    table.add_column("Changed", style="yellow", justify="right")
+    table.add_column("Unpushed", style="yellow", justify="right")
+    table.add_column("Behind", style="yellow", justify="right")
+    table.add_column("Merged Branches", style="magenta")
+    table.add_column("Remote", style="dim", no_wrap=False)
+
+    # Add rows
     for status in statuses:
         if not verbose and not status.has_issues():
             continue
 
-        click.echo(click.style(f"📁 {status.name}", fg="cyan", bold=True))
-        if status.current_branch:
-            click.echo(f"   Current branch: {status.current_branch}")
-        if status.remote_url:
-            click.echo(f"   Remote: {status.remote_url}")
+        # Repository name
+        repo_name = f"📁 {status.name}"
 
+        # Branch
+        branch = status.current_branch or "-"
+
+        # Status indicator
         if status.errors:
-            for error in status.errors:
-                click.echo(click.style(f"   ✗ Error: {error}", fg="red"))
+            status_icon = "[red]✗ Error[/red]"
+        elif status.has_issues():
+            status_icon = "[yellow]⚠ Issues[/yellow]"
+        else:
+            status_icon = "[green]✓ Clean[/green]"
 
-        if status.has_uncommitted and status.changed_files:
-            click.echo(click.style(f"   • Changed files ({len(status.changed_files)}):", fg="yellow"))
-            for file in status.changed_files[:10]:  # Limit to 10 files
-                click.echo(f"     - {file}")
-            if len(status.changed_files) > 10:
-                click.echo(f"     ... and {len(status.changed_files) - 10} more")
+        # Changed files count
+        changed_count = str(len(status.changed_files)) if status.changed_files else "-"
 
-        if status.ahead_of_remote:
-            click.echo(click.style(f"   • Unpushed commits: {status.ahead_of_remote} commit{'s' if status.ahead_of_remote != 1 else ''} ahead of remote", fg="yellow"))
+        # Unpushed commits
+        unpushed = str(status.ahead_of_remote) if status.ahead_of_remote > 0 else "-"
 
+        # Behind branches
+        behind_text = ""
         if status.behind_branches:
-            click.echo(click.style("   • Branches behind remote:", fg="yellow"))
-            for branch, count in status.behind_branches.items():
-                click.echo(f"     - {branch}: {count} commit{'s' if count != 1 else ''} behind")
+            behind_list = [f"{branch}: {count}" for branch, count in status.behind_branches.items()]
+            behind_text = "\n".join(behind_list)
+        else:
+            behind_text = "-"
 
+        # Merged branches
+        merged_text = ""
         if status.merged_branches:
-            click.echo(click.style("   • Merged branches (can be deleted):", fg="magenta"))
-            for branch in status.merged_branches:
-                click.echo(f"     - {branch}")
+            merged_text = "\n".join(status.merged_branches[:5])  # Limit to 5
+            if len(status.merged_branches) > 5:
+                merged_text += f"\n... +{len(status.merged_branches) - 5} more"
+        else:
+            merged_text = "-"
 
-        click.echo()
+        # Remote URL (truncate if too long)
+        remote = status.remote_url or "-"
+        if len(remote) > 50:
+            remote = remote[:47] + "..."
+
+        # Add row
+        table.add_row(
+            repo_name,
+            branch,
+            status_icon,
+            changed_count,
+            unpushed,
+            behind_text,
+            merged_text,
+            remote
+        )
+
+    console.print("\n")
+    console.print(table)
+    console.print()
 
 
 async def execute_action_push(statuses: List[RepoStatus]) -> Dict[str, str]:

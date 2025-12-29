@@ -1,6 +1,7 @@
 """Codex command - integrations with OpenAI Codex."""
 
 import click
+import pyperclip
 
 
 @click.command()
@@ -11,8 +12,6 @@ def codex(query, language):
 
     If no query is provided, reads from clipboard.
     """
-    import pyperclip
-
     input_query = query if query else pyperclip.paste()
 
     if not input_query:

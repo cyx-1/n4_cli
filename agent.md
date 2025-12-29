@@ -56,13 +56,6 @@ uv add requests
 uv add --dev pytest-cov
 ```
 
-### Why uv?
-
-- **Fast**: 10-100x faster than pip
-- **Reliable**: Lock file ensures reproducible builds (uv.lock)
-- **Modern**: Better dependency resolution
-- **Integrated**: Combines pip, pip-tools, and virtualenv functionality
-
 ### Project Dependencies
 
 Current dependencies are managed in `pyproject.toml`:
@@ -224,6 +217,7 @@ Follow standard Python conventions:
 - 4 spaces for indentation
 - Max line length: 120 characters
 - Descriptive variable names
+- Use module level import at top section of a python file instead of lazy loading of import
 
 ## Common Development Tasks
 

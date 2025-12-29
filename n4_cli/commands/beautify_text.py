@@ -1,6 +1,10 @@
 """Beautify text command - formats and beautifies text content."""
 
+import json
+import xml.dom.minidom
+
 import click
+import pyperclip
 
 
 @click.command(name="beautify-text")
@@ -13,8 +17,6 @@ def beautify_text(text, format_json, format_xml, indent):
 
     If no text is provided, reads from clipboard.
     """
-    import pyperclip
-
     input_text = text if text else pyperclip.paste()
 
     if not input_text:
@@ -23,16 +25,13 @@ def beautify_text(text, format_json, format_xml, indent):
 
     try:
         if format_json:
-            import json
             parsed = json.loads(input_text)
             beautified = json.dumps(parsed, indent=indent, ensure_ascii=False)
         elif format_xml:
-            import xml.dom.minidom
             dom = xml.dom.minidom.parseString(input_text)
             beautified = dom.toprettyxml(indent=" " * indent)
         else:
             # Auto-detect format
-            import json
             try:
                 parsed = json.loads(input_text)
                 beautified = json.dumps(parsed, indent=indent, ensure_ascii=False)

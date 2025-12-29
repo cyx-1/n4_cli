@@ -1,6 +1,7 @@
 """Convert slash command - converts between different path formats."""
 
 import click
+import pyperclip
 
 
 @click.command(name="convert-slash")
@@ -12,8 +13,6 @@ def convert_slash(path, to_windows, to_unix):
 
     If no path is provided, reads from clipboard.
     """
-    import pyperclip
-
     input_path = path if path else pyperclip.paste()
 
     if not input_path:

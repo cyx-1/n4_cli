@@ -280,6 +280,7 @@ class RepoStatus:
             self.changed_files or
             self.behind_branches or
             self.ahead_of_remote or
+            self.unpulled_commits or
             self.merged_branches or
             self.has_uncommitted or
             self.errors
@@ -546,6 +547,7 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
     table.add_column("Status", style="white")
     table.add_column("Changed", style="yellow", justify="right")
     table.add_column("Unpushed", style="yellow", justify="right")
+    table.add_column("Unpulled", style="red", justify="right")
     table.add_column("Behind", style="yellow", justify="right")
     table.add_column("Merged Branches", style="magenta")
     table.add_column("Remote", style="dim", no_wrap=False)
@@ -574,6 +576,9 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
 
         # Unpushed commits
         unpushed = str(status.ahead_of_remote) if status.ahead_of_remote > 0 else "-"
+
+        # Unpulled commits
+        unpulled = str(len(status.unpulled_commits)) if status.unpulled_commits else "-"
 
         # Behind branches
         behind_text = ""
@@ -604,6 +609,7 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
             status_icon,
             changed_count,
             unpushed,
+            unpulled,
             behind_text,
             merged_text,
             remote

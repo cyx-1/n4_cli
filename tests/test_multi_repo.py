@@ -14,7 +14,7 @@ from n4_cli.commands.git_check.actions import (
 )
 from n4_cli.commands.git_check.checker import check_repo_status, find_git_repos
 from n4_cli.commands.git_check.models import RepoStatus
-from n4_cli.commands.multi_repo import git_check
+from n4_cli.commands.git_check import git_check
 from n4_cli.git_service import GitService
 
 

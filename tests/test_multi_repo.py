@@ -7,15 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from n4_cli.commands.multi_repo import (
-    RepoStatus,
-    check_repo_status,
+from n4_cli.commands.git_check.actions import (
     execute_action_pull,
     execute_action_prune,
     execute_action_push,
-    find_git_repos,
-    git_check,
 )
+from n4_cli.commands.git_check.checker import check_repo_status, find_git_repos
+from n4_cli.commands.git_check.models import RepoStatus
+from n4_cli.commands.multi_repo import git_check
 from n4_cli.git_service import GitService
 
 

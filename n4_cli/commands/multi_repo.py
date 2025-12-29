@@ -267,6 +267,7 @@ class RepoStatus:
         self.changed_files: List[str] = []
         self.behind_branches: Dict[str, int] = {}  # branch_name: commits_behind
         self.ahead_of_remote: int = 0  # commits ahead of upstream
+        self.unpulled_commits: List[Dict[str, str]] = []  # List of unpulled commit info
         self.merged_branches: List[str] = []
         self.current_branch: Optional[str] = None
         self.remote_url: Optional[str] = None
@@ -355,6 +356,25 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
             )
             if returncode == 0 and ahead_output and int(ahead_output) > 0:
                 status.ahead_of_remote = int(ahead_output)
+
+            # Get unpulled commits (commits on remote but not local)
+            returncode, unpulled_output, _ = await run_git_async(
+                f"git log HEAD..@{{upstream}} --pretty=format:'%H|%an|%ae|%ai|%s' --max-count=20",
+                repo_path
+            )
+            if returncode == 0 and unpulled_output:
+                # Parse commit information
+                for line in unpulled_output.split('\n'):
+                    if line.strip():
+                        parts = line.split('|')
+                        if len(parts) >= 5:
+                            status.unpulled_commits.append({
+                                'hash': parts[0][:8],  # Short hash
+                                'author': parts[1],
+                                'email': parts[2],
+                                'date': parts[3],
+                                'message': parts[4]
+                            })
 
     # Check for uncommitted changes
     returncode, output, _ = await run_git_async("git status --porcelain", repo_path)
@@ -578,6 +598,54 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
     console.print("\n")
     console.print(table)
     console.print()
+
+
+def display_unpulled_commits(statuses: List[RepoStatus]):
+    """Display unpulled commits in a rich table."""
+    console = Console()
+
+    # Collect all statuses with unpulled commits
+    repos_with_unpulled = [s for s in statuses if s.unpulled_commits]
+
+    if not repos_with_unpulled:
+        return
+
+    console.print("\n")
+    console.print("[bold yellow]⚠️  Warning: Some repositories have unpulled commits from remote![/bold yellow]")
+    console.print("[yellow]You should pull these changes before pushing to avoid conflicts.[/yellow]\n")
+
+    for status in repos_with_unpulled:
+        # Create table for each repository
+        table = Table(
+            title=f"📥 {status.name} - Unpulled Commits ({len(status.unpulled_commits)} commit{'s' if len(status.unpulled_commits) != 1 else ''})",
+            show_header=True,
+            header_style="bold cyan"
+        )
+
+        table.add_column("Hash", style="dim", width=10)
+        table.add_column("Author", style="cyan", no_wrap=True)
+        table.add_column("Date", style="blue", width=20)
+        table.add_column("Message", style="white")
+
+        # Add rows
+        for commit in status.unpulled_commits:
+            # Format date to be more readable
+            date_str = commit['date'][:19]  # Remove timezone info for cleaner display
+
+            # Truncate message if too long
+            message = commit['message']
+            if len(message) > 80:
+                message = message[:77] + "..."
+
+            table.add_row(
+                commit['hash'],
+                commit['author'],
+                date_str,
+                message
+            )
+
+        console.print(table)
+        console.print()
 
 
 async def display_push_repos_with_messages(push_repos: List[RepoStatus]) -> Dict[RepoStatus, str]:
@@ -838,6 +906,9 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
 
     # Display status
     display_status(statuses, verbose)
+
+    # Display unpulled commits warning
+    display_unpulled_commits(statuses)
 
     # Execute action if specified
     if action:

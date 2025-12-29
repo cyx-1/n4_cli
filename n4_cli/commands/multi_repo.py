@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -10,6 +11,42 @@ import click
 import questionary
 from rich.console import Console
 from rich.table import Table
+
+
+def is_claude_available() -> bool:
+    """Check if claude CLI is available."""
+    return shutil.which("claude") is not None
+
+
+async def generate_commit_message(repo_path: Path) -> str:
+    """Generate a commit message using Claude CLI.
+
+    Returns a suggested commit message or a default message if Claude is not available.
+    """
+    if not is_claude_available():
+        return "Update changes"
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            'claude --model haiku -p "suggest a commit msg no longer than 50 words in a single sentence based on the unpushed / unstaged changes in the current branch"',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(repo_path)
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode == 0 and stdout:
+            msg = stdout.decode().strip()
+            # Clean up the message (remove quotes if present)
+            msg = msg.strip('"').strip("'").strip()
+            # Limit to 100 chars for table display
+            if len(msg) > 100:
+                msg = msg[:97] + "..."
+            return msg
+        else:
+            return "Update changes"
+    except Exception:
+        return "Update changes"
 
 
 def select_repos_interactive(repos: List[Path], prompt: str = "Select repositories") -> List[Path]:
@@ -459,7 +496,46 @@ def display_status(statuses: List[RepoStatus], verbose: bool = False):
     console.print()
 
 
-async def execute_action_push(statuses: List[RepoStatus]) -> Dict[str, str]:
+async def display_push_repos_with_messages(push_repos: List[RepoStatus]) -> Dict[RepoStatus, str]:
+    """Display push repos with AI-generated commit messages and return the mapping.
+
+    Returns a dict mapping RepoStatus to commit message.
+    """
+    console = Console()
+
+    # Generate commit messages in parallel
+    console.print("\n[cyan]Generating commit messages...[/cyan]")
+    tasks = [generate_commit_message(status.path) for status in push_repos]
+    commit_messages = await asyncio.gather(*tasks)
+
+    # Create mapping
+    repo_to_message = {status: msg for status, msg in zip(push_repos, commit_messages)}
+
+    # Create table
+    table = Table(title="\n1. PUSH - Commit and push changes", show_header=True, header_style="bold cyan")
+
+    table.add_column("#", style="cyan", justify="right", width=4)
+    table.add_column("Repository", style="cyan", no_wrap=True)
+    table.add_column("Changes", style="yellow", justify="right", width=8)
+    table.add_column("Suggested Commit Message", style="green")
+
+    # Add rows
+    for i, status in enumerate(push_repos, 1):
+        table.add_row(
+            str(i),
+            status.name,
+            str(len(status.changed_files)),
+            repo_to_message[status]
+        )
+
+    console.print("\n")
+    console.print(table)
+    console.print()
+
+    return repo_to_message
+
+
+async def execute_action_push(statuses: List[RepoStatus], repo_to_message: Dict[RepoStatus, str]) -> Dict[str, str]:
     """Push changes to main/master for repos with uncommitted changes."""
     results = {}
 
@@ -468,6 +544,9 @@ async def execute_action_push(statuses: List[RepoStatus]) -> Dict[str, str]:
             continue
 
         repo_path = status.path
+
+        # Get commit message for this repo
+        commit_msg = repo_to_message.get(status, "Auto-commit: batch update")
 
         # Get main/master branch
         returncode, main_branch, _ = await run_git_async(
@@ -484,9 +563,11 @@ async def execute_action_push(statuses: List[RepoStatus]) -> Dict[str, str]:
             results[status.name] = f"Failed to add files: {stderr}"
             continue
 
-        # Commit changes
+        # Commit changes with generated message
+        # Escape quotes in commit message
+        commit_msg_escaped = commit_msg.replace('"', '\\"')
         returncode, _, stderr = await run_git_async(
-            'git commit -m "Auto-commit: batch update"',
+            f'git commit -m "{commit_msg_escaped}"',
             repo_path
         )
         if returncode != 0:
@@ -693,15 +774,17 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
         actions_to_execute = []
 
         # Option 1: Push changes
+        repo_to_message = {}
         if push_repos:
-            click.echo(click.style("1. PUSH - Commit and push changes", fg="cyan", bold=True))
-            for i, status in enumerate(push_repos, 1):
-                click.echo(f"   {i}. {status.name} ({len(status.changed_files)} changed file(s))")
+            # Display repos with AI-generated commit messages
+            repo_to_message = asyncio.run(display_push_repos_with_messages(push_repos))
 
             if click.confirm(click.style("\n   Execute push action?", fg="yellow")):
                 selected_push = select_repo_statuses_interactive(push_repos, "Select repositories for PUSH")
                 if selected_push:
-                    actions_to_execute.append(("push", selected_push))
+                    # Filter repo_to_message for selected repos only
+                    selected_repo_to_message = {k: v for k, v in repo_to_message.items() if k in selected_push}
+                    actions_to_execute.append(("push", selected_push, selected_repo_to_message))
             click.echo()
 
         # Option 2: Pull branches
@@ -738,11 +821,19 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
 
         # Show summary and final confirmation
         click.echo(click.style("=== Summary of Actions ===\n", fg="magenta", bold=True))
-        for action_type, repos in actions_to_execute:
+        for action_item in actions_to_execute:
+            if len(action_item) == 3:
+                action_type, repos, repo_msg_map = action_item
+            else:
+                action_type, repos = action_item
+                repo_msg_map = {}
+
             click.echo(click.style(f"{action_type.upper()}:", fg="cyan", bold=True))
             for repo in repos:
                 if action_type == "push":
+                    commit_msg = repo_msg_map.get(repo, "Auto-commit: batch update")
                     click.echo(f"  • {repo.name}: {len(repo.changed_files)} file(s) to commit and push")
+                    click.echo(f"      Message: {commit_msg}")
                 elif action_type == "pull":
                     click.echo(f"  • {repo.name}:")
                     for branch, count in repo.behind_branches.items():
@@ -760,11 +851,19 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
         # Execute selected actions
         all_results = {}
 
-        for action_type, repos in actions_to_execute:
+        for action_item in actions_to_execute:
+            if len(action_item) == 3:
+                # Push action with commit messages
+                action_type, repos, repo_msg_map = action_item
+            else:
+                # Other actions
+                action_type, repos = action_item
+                repo_msg_map = {}
+
             click.echo(click.style(f"\n⚙️  Executing {action_type}...\n", fg="cyan"))
 
             if action_type == "push":
-                results = asyncio.run(execute_action_push(statuses))
+                results = asyncio.run(execute_action_push(repos, repo_msg_map))
             elif action_type == "pull":
                 results = asyncio.run(execute_action_pull(statuses))
             elif action_type == "prune":

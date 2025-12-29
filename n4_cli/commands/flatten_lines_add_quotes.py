@@ -1,9 +1,23 @@
 """Flatten lines and add quotes - converts multi-line text to single line with quoted values."""
 
-import sys
-
 import click
-import pyperclip
+
+from ..text_processor import text_processor_command, ProcessingResult
+
+
+def _flatten_lines_processor(lines):
+    """Process lines by flattening and adding quotes."""
+    # Filter out empty lines and strip line endings
+    non_empty_lines = [line.rstrip('\r\n') for line in lines if line.strip()]
+
+    # Format with quotes and commas
+    flattened = ''.join(f"'{line}'," for line in non_empty_lines)
+
+    return ProcessingResult(
+        result=flattened,
+        original_count=len(lines),
+        processed_count=len(non_empty_lines)
+    )
 
 
 @click.command(name="flatten-lines-add-quotes")
@@ -11,6 +25,11 @@ import pyperclip
 @click.option("--in-place", "-i", is_flag=True, help="Modify file in place (default when file is provided)")
 @click.option("--output", "-o", type=click.Path(), help="Output file path (default: stdout)")
 @click.option("--clipboard", "-c", is_flag=True, help="Read from and write to clipboard")
+@text_processor_command(
+    process_func=_flatten_lines_processor,
+    success_message_template="[OK] Flattened {processed_count} lines",
+    result_is_lines=False
+)
 def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
     """Flatten multiple lines into single line with quoted, comma-separated values.
 
@@ -41,91 +60,4 @@ def flatten_lines_add_quotes(file_path, in_place, output, clipboard):
       n4_cli flatten-lines-add-quotes -c                    # Flatten clipboard content
       n4_cli flatten-lines-add-quotes data.txt -o out.txt   # Flatten to different file
     """
-    # Determine mode: file, stdin, or clipboard
-    if file_path:
-        # File mode
-        try:
-            with open(file_path, 'r') as f:
-                content = f.readlines()
-
-            # Filter out empty lines but preserve trailing whitespace
-            lines = [line.rstrip('\r\n') for line in content if line.strip()]
-
-            # Process lines: format with quotes
-            flattened = ''.join(f"'{line}'," for line in lines)
-
-            # Determine output destination
-            if output:
-                # Write to specified output file
-                with open(output, 'w') as f:
-                    f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(lines)} lines to: {output}", fg="green"))
-            elif in_place or (not output and not in_place):
-                # Default: in-place editing when file is provided
-                with open(file_path, 'w') as f:
-                    f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(lines)} lines in: {file_path}", fg="green"))
-            else:
-                # Output to stdout
-                click.echo(flattened)
-
-        except Exception as e:
-            click.echo(click.style(f"Error processing file: {e}", fg="red"), err=True)
-            raise click.Abort()
-
-    elif not sys.stdin.isatty():
-        # Pipe mode - read from stdin
-        try:
-            # Read from stdin
-            content = sys.stdin.readlines()
-
-            # Filter out empty lines but preserve trailing whitespace
-            lines = [line.rstrip('\r\n') for line in content if line.strip()]
-
-            # Process lines: format with quotes
-            flattened = ''.join(f"'{line}'," for line in lines)
-
-            # Output destination
-            if output:
-                with open(output, 'w') as f:
-                    f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(lines)} lines to: {output}", fg="green"), err=True)
-            else:
-                # Write to stdout (for piping)
-                click.echo(flattened)
-
-        except Exception as e:
-            click.echo(click.style(f"Error processing stdin: {e}", fg="red"), err=True)
-            raise click.Abort()
-
-    else:
-        # Clipboard mode
-        try:
-            clipboard_content = pyperclip.paste()
-
-            if not clipboard_content:
-                click.echo(click.style("Clipboard is empty", fg="yellow"))
-                return
-
-            lines = clipboard_content.split('\n')
-
-            # Filter out empty lines but preserve trailing whitespace
-            lines = [line.rstrip('\r\n') for line in lines if line.strip()]
-
-            # Process lines: format with quotes
-            flattened = ''.join(f"'{line}'," for line in lines)
-
-            if output:
-                with open(output, 'w') as f:
-                    f.write(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(lines)} lines from clipboard to: {output}", fg="green"))
-            else:
-                # Write back to clipboard and print to stdout
-                pyperclip.copy(flattened)
-                click.echo(click.style(f"[OK] Flattened {len(lines)} lines", fg="green"), err=True)
-                click.echo(click.style("Result copied to clipboard", fg="cyan"), err=True)
-                click.echo(flattened)
-
-        except Exception as e:
-            click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)
-            raise click.Abort()
+    pass

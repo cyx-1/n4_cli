@@ -52,8 +52,8 @@ async def generate_commit_message(repo_path: Path) -> str:
             click.echo(output)
             click.echo(click.style("=" * 80, fg="blue"))
 
-            # Strip markdown code blocks if present
-            if output.startswith('```yaml') or output.startswith('```'):
+            # Strip markdown code blocks FIRST (before parsing)
+            if '```' in output:
                 # Remove code block markers
                 lines = output.split('\n')
                 # Find start and end of code block
@@ -63,14 +63,16 @@ async def generate_commit_message(repo_path: Path) -> str:
                     if line.strip().startswith('```'):
                         in_block = not in_block
                         continue
-                    if in_block or (not line.strip().startswith('```')):
+                    if in_block:
                         yaml_content.append(line)
-                output = '\n'.join(yaml_content).strip()
 
-                # Debug: Print cleaned output
-                click.echo(click.style("[DEBUG] After stripping code blocks:", fg="blue"))
-                click.echo(output)
-                click.echo(click.style("-" * 80, fg="blue"))
+                # If we found content in code blocks, use it
+                if yaml_content:
+                    output = '\n'.join(yaml_content).strip()
+                    # Debug: Print cleaned output
+                    click.echo(click.style("[DEBUG] After stripping code blocks:", fg="blue"))
+                    click.echo(output)
+                    click.echo(click.style("-" * 80, fg="blue"))
 
             # Try to parse YAML
             try:

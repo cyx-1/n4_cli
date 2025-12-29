@@ -1,9 +1,21 @@
 """Remove blanks command - removes blank/empty lines from text."""
 
-import sys
-
 import click
-import pyperclip
+
+from ..text_processor import text_processor_command, ProcessingResult
+
+
+def _remove_blanks_processor(lines):
+    """Process lines by removing blanks."""
+    # Remove blank lines (preserving newlines in non-blank lines)
+    non_blank_lines = [line for line in lines if line.strip() != '']
+
+    return ProcessingResult(
+        result=non_blank_lines,
+        original_count=len(lines),
+        processed_count=len(non_blank_lines),
+        metadata={'removed_count': len(lines) - len(non_blank_lines)}
+    )
 
 
 @click.command(name="remove-blanks")
@@ -11,6 +23,10 @@ import pyperclip
 @click.option("--in-place", "-i", is_flag=True, help="Modify file in place (default when file is provided)")
 @click.option("--output", "-o", type=click.Path(), help="Output file path (default: stdout)")
 @click.option("--clipboard", "-c", is_flag=True, help="Read from and write to clipboard")
+@text_processor_command(
+    process_func=_remove_blanks_processor,
+    success_message_template="[OK] Removed {removed_count} blank lines from {original_count} total lines"
+)
 def remove_blanks(file_path, in_place, output, clipboard):
     """Remove blank/empty lines from text.
 
@@ -35,123 +51,4 @@ def remove_blanks(file_path, in_place, output, clipboard):
       n4_cli remove-blanks -c                    # Remove blanks from clipboard
       n4_cli remove-blanks data.txt -o out.txt   # Remove blanks to different file
     """
-    # Determine mode: file, stdin, or clipboard
-    if file_path:
-        # File mode
-        try:
-            with open(file_path, 'r') as f:
-                content = f.readlines()
-
-            # Remove blank lines
-            non_blank_lines = [line for line in content if line.strip() != '']
-
-            # Determine output destination
-            if output:
-                # Write to specified output file
-                with open(output, 'w') as f:
-                    for line_number, line in enumerate(non_blank_lines):
-                        if line_number < len(non_blank_lines) - 1:
-                            f.write(line)
-                        else:
-                            # Last line: remove trailing whitespace
-                            f.write(line.rstrip())
-                original_count = len(content)
-                removed_count = original_count - len(non_blank_lines)
-                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"))
-                click.echo(click.style(f"  Saved to: {output}", fg="green"))
-            elif in_place or (not output and not in_place):
-                # Default: in-place editing when file is provided
-                with open(file_path, 'w') as f:
-                    for line_number, line in enumerate(non_blank_lines):
-                        if line_number < len(non_blank_lines) - 1:
-                            f.write(line)
-                        else:
-                            # Last line: remove trailing whitespace
-                            f.write(line.rstrip())
-                original_count = len(content)
-                removed_count = original_count - len(non_blank_lines)
-                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"))
-                click.echo(click.style(f"  File: {file_path}", fg="green"))
-            else:
-                # Output to stdout
-                for line_number, line in enumerate(non_blank_lines):
-                    if line_number < len(non_blank_lines) - 1:
-                        click.echo(line.rstrip('\n'))
-                    else:
-                        # Last line: remove trailing whitespace
-                        click.echo(line.rstrip(), nl=False)
-
-        except Exception as e:
-            click.echo(click.style(f"Error processing file: {e}", fg="red"), err=True)
-            raise click.Abort()
-
-    elif not sys.stdin.isatty():
-        # Pipe mode - read from stdin
-        try:
-            # Read from stdin
-            content = sys.stdin.readlines()
-
-            # Remove blank lines
-            non_blank_lines = [line for line in content if line.strip() != '']
-
-            # Output destination
-            if output:
-                with open(output, 'w') as f:
-                    for line_number, line in enumerate(non_blank_lines):
-                        if line_number < len(non_blank_lines) - 1:
-                            f.write(line)
-                        else:
-                            # Last line: remove trailing whitespace
-                            f.write(line.rstrip())
-                original_count = len(content)
-                removed_count = original_count - len(non_blank_lines)
-                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"), err=True)
-                click.echo(click.style(f"  Saved to: {output}", fg="green"), err=True)
-            else:
-                # Write to stdout (for piping)
-                for line_number, line in enumerate(non_blank_lines):
-                    if line_number < len(non_blank_lines) - 1:
-                        click.echo(line.rstrip('\n'))
-                    else:
-                        # Last line: remove trailing whitespace
-                        click.echo(line.rstrip(), nl=False)
-
-        except Exception as e:
-            click.echo(click.style(f"Error processing stdin: {e}", fg="red"), err=True)
-            raise click.Abort()
-
-    else:
-        # Clipboard mode
-        try:
-            clipboard_content = pyperclip.paste()
-
-            if not clipboard_content:
-                click.echo(click.style("Clipboard is empty", fg="yellow"))
-                return
-
-            lines = clipboard_content.split('\n')
-
-            # Remove blank lines
-            non_blank_lines = [line for line in lines if line.strip() != '']
-
-            result = '\n'.join(non_blank_lines)
-
-            if output:
-                with open(output, 'w') as f:
-                    f.write(result)
-                original_count = len(lines)
-                removed_count = original_count - len(non_blank_lines)
-                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"))
-                click.echo(click.style(f"  Saved to: {output}", fg="green"))
-            else:
-                # Write back to clipboard and print to stdout
-                pyperclip.copy(result)
-                original_count = len(lines)
-                removed_count = original_count - len(non_blank_lines)
-                click.echo(click.style(f"[OK] Removed {removed_count} blank lines from {original_count} total lines", fg="green"), err=True)
-                click.echo(click.style("Result copied to clipboard", fg="cyan"), err=True)
-                click.echo(result)
-
-        except Exception as e:
-            click.echo(click.style(f"Error processing clipboard: {e}", fg="red"), err=True)
-            raise click.Abort()
+    pass

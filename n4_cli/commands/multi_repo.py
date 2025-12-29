@@ -48,6 +48,21 @@ Rules:
         if proc.returncode == 0 and stdout:
             output = stdout.decode().strip()
 
+            # Strip markdown code blocks if present
+            if output.startswith('```yaml') or output.startswith('```'):
+                # Remove code block markers
+                lines = output.split('\n')
+                # Find start and end of code block
+                yaml_content = []
+                in_block = False
+                for line in lines:
+                    if line.strip().startswith('```'):
+                        in_block = not in_block
+                        continue
+                    if in_block or (not line.strip().startswith('```')):
+                        yaml_content.append(line)
+                output = '\n'.join(yaml_content).strip()
+
             # Try to parse YAML
             try:
                 data = yaml.safe_load(output)
@@ -63,12 +78,20 @@ Rules:
                 lines = output.split('\n')
                 for line in lines:
                     line = line.strip()
-                    if line and not line.startswith(('Based on', 'Here', 'commit_message:', '**', '-', '#')):
-                        # Clean up the message
+                    if line and not line.startswith(('Based on', 'Here', 'commit_message:', '**', '-', '#', '```')):
+                        # Check if it's a YAML key-value pair
+                        if ':' in line and line.split(':')[0].strip() == 'commit_message':
+                            # Extract value after colon
+                            msg = ':'.join(line.split(':')[1:]).strip().strip('"').strip("'").strip()
+                            if len(msg) > 100:
+                                msg = msg[:97] + "..."
+                            return msg
+                        # Otherwise try direct extraction
                         msg = line.strip('"').strip("'").strip()
-                        if len(msg) > 100:
-                            msg = msg[:97] + "..."
-                        return msg
+                        if len(msg) > 20:  # Only accept if it's substantial
+                            if len(msg) > 100:
+                                msg = msg[:97] + "..."
+                            return msg
 
             return "Update changes"
         else:
@@ -807,12 +830,12 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
             # Display repos with AI-generated commit messages
             repo_to_message = asyncio.run(display_push_repos_with_messages(push_repos))
 
-            if click.confirm(click.style("\n   Execute push action?", fg="yellow")):
-                selected_push = select_repo_statuses_interactive(push_repos, "Select repositories for PUSH")
-                if selected_push:
-                    # Filter repo_to_message for selected repos only
-                    selected_repo_to_message = {k: v for k, v in repo_to_message.items() if k in selected_push}
-                    actions_to_execute.append(("push", selected_push, selected_repo_to_message))
+            # Directly go to repo selection
+            selected_push = select_repo_statuses_interactive(push_repos, "Select repositories for PUSH")
+            if selected_push:
+                # Filter repo_to_message for selected repos only
+                selected_repo_to_message = {k: v for k, v in repo_to_message.items() if k in selected_push}
+                actions_to_execute.append(("push", selected_push, selected_repo_to_message))
             click.echo()
 
         # Option 2: Pull branches

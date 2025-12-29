@@ -1,4 +1,4 @@
-"""Multi-repo management - parallel async operations across multiple git repositories."""
+"""Git repository checker - parallel async operations across multiple git repositories."""
 
 import asyncio
 import os
@@ -739,7 +739,7 @@ async def execute_action_prune(statuses: List[RepoStatus], git_service: GitServi
     return results
 
 
-@click.command(name="git")
+@click.command(name="git-check")
 @click.option(
     "--path",
     "-p",
@@ -766,8 +766,8 @@ async def execute_action_prune(statuses: List[RepoStatus], git_service: GitServi
     is_flag=True,
     help="Interactive mode to select and execute actions (push/pull/prune)"
 )
-def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
-    """Manage multiple git repositories in parallel.
+def git_check(path: Path, recursive: bool, verbose: bool, action: bool):
+    """Check and manage multiple git repositories in parallel.
 
     This command analyzes all git repositories in the specified path and reports:
     - Changed files (uncommitted/unstaged)
@@ -779,11 +779,11 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
     Use --action for interactive mode to select and execute batch operations.
 
     Examples:
-      n4 git                       # Check current directory recursively
-      n4 git -p ~/projects         # Check ~/projects recursively
-      n4 git --no-recursive        # Check only current directory (no subdirs)
-      n4 git -v                    # Show all repos including clean ones
-      n4 git --action              # Interactive mode to execute actions
+      n4_cli git-check                    # Check current directory recursively
+      n4_cli git-check -p ~/projects      # Check ~/projects recursively
+      n4_cli git-check --no-recursive     # Check only current directory (no subdirs)
+      n4_cli git-check -v                 # Show all repos including clean ones
+      n4_cli git-check --action           # Interactive mode to execute actions
     """
     # Find all git repositories
     click.echo(click.style("🔍 Scanning for git repositories...", fg="cyan"))

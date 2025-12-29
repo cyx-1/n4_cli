@@ -40,22 +40,22 @@ uv run n4_cli
 
 ## Key Features
 
-### Multi-Repository Management
+### Git Repository Checker
 
-The `multi-repo` command enables parallel async operations across multiple git repositories:
+The `git-check` command enables parallel async operations across multiple git repositories:
 
 ```bash
 # Check status of all repos in current directory
-n4_cli multi-repo
+n4_cli git-check
 
 # Check all repos recursively
-n4_cli multi-repo -p ~/projects -r
+n4_cli git-check -p ~/projects -r
 
 # Show all repos including clean ones
-n4_cli multi-repo -v
+n4_cli git-check -v
 
 # Interactive mode - walk through available actions and execute
-n4_cli multi-repo --action
+n4_cli git-check --action
 ```
 
 **Features:**

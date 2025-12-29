@@ -1,4 +1,4 @@
-"""Tests for multi_repo command using mock git service."""
+"""Tests for git_check command using mock git service."""
 
 import asyncio
 from pathlib import Path
@@ -14,7 +14,7 @@ from n4_cli.commands.multi_repo import (
     execute_action_prune,
     execute_action_push,
     find_git_repos,
-    multi_repo,
+    git_check,
 )
 from n4_cli.git_service import GitService
 
@@ -412,15 +412,15 @@ class TestFindGitRepos:
         assert repos[0] == tmp_path
 
 
-class TestMultiRepoCommand:
-    """Test multi_repo CLI command."""
+class TestGitCheckCommand:
+    """Test git_check CLI command."""
 
-    def test_multi_repo_command_no_repos(self, tmp_path):
+    def test_git_check_command_no_repos(self, tmp_path):
         """Test command when no repositories are found."""
         runner = CliRunner()
         # Note: --recursive is a flag, so we pass it or omit it (default is True)
         result = runner.invoke(
-            multi_repo,
+            git_check,
             ["--path", str(tmp_path)],
             catch_exceptions=True
         )

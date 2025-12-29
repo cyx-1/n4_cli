@@ -40,6 +40,42 @@ uv run n4_cli
 
 ## Key Features
 
+### AutoAgent - Task Automation
+
+The `autoagent` command executes tasks sequentially from a markdown file using Claude CLI:
+
+```bash
+# Run tasks from autoagent.md (default)
+n4_cli autoagent
+
+# Use a custom file
+n4_cli autoagent --file my-tasks.md
+
+# Use a specific model
+n4_cli autoagent --model opus
+
+# Show prompts before execution
+n4_cli autoagent --verbose
+```
+
+**File Format:**
+Create an `autoagent.md` file with tasks:
+
+```markdown
+## Task: First task description
+Prompt content for the first task
+
+## Task: Second task description
+Prompt content for the second task
+```
+
+**Features:**
+- 🤖 **Sequential execution** - tasks run one by one using Claude CLI
+- 📝 **Simple format** - markdown-based task definitions
+- 🎯 **Model selection** - choose between sonnet, opus, or haiku
+- ⚠️ **Error handling** - option to continue or stop on failures
+- 📊 **Progress tracking** - clear visual feedback for each task
+
 ### Git Repository Checker
 
 The `git-check` command enables parallel async operations across multiple git repositories:

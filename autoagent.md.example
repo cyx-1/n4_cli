@@ -1,0 +1,15 @@
+# AutoAgent Task List
+
+This is an example file showing how to structure tasks for the `n4_cli autoagent` command.
+
+## Task: Check Python version
+
+What version of Python is recommended for this project? Check the pyproject.toml file and provide a brief summary.
+
+## Task: List all CLI commands
+
+What commands are available in this n4_cli tool? List them with brief descriptions.
+
+## Task: Suggest improvements
+
+Review the project structure and suggest one improvement that could be made to the CLI tool's user experience.

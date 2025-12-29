@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import click
 import questionary
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -27,8 +28,17 @@ async def generate_commit_message(repo_path: Path) -> str:
         return "Update changes"
 
     try:
+        # Use YAML format for structured output
+        prompt = """Analyze the git changes and output YAML with this exact format:
+commit_message: "your single-line commit message here (max 50 words)"
+
+Rules:
+- Single sentence only
+- No explanations or extra text
+- Just the YAML output"""
+
         proc = await asyncio.create_subprocess_shell(
-            'claude --model haiku -p "suggest a commit msg no longer than 50 words in a single sentence based on the unpushed / unstaged changes in the current branch"',
+            f'claude --model haiku -p "{prompt}"',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(repo_path)
@@ -36,13 +46,31 @@ async def generate_commit_message(repo_path: Path) -> str:
         stdout, stderr = await proc.communicate()
 
         if proc.returncode == 0 and stdout:
-            msg = stdout.decode().strip()
-            # Clean up the message (remove quotes if present)
-            msg = msg.strip('"').strip("'").strip()
-            # Limit to 100 chars for table display
-            if len(msg) > 100:
-                msg = msg[:97] + "..."
-            return msg
+            output = stdout.decode().strip()
+
+            # Try to parse YAML
+            try:
+                data = yaml.safe_load(output)
+                if isinstance(data, dict) and 'commit_message' in data:
+                    msg = str(data['commit_message']).strip()
+                    # Limit to 100 chars for table display
+                    if len(msg) > 100:
+                        msg = msg[:97] + "..."
+                    return msg
+            except yaml.YAMLError:
+                # If YAML parsing fails, try to extract message from raw output
+                # Look for lines that look like commit messages (not meta-text)
+                lines = output.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line and not line.startswith(('Based on', 'Here', 'commit_message:', '**', '-', '#')):
+                        # Clean up the message
+                        msg = line.strip('"').strip("'").strip()
+                        if len(msg) > 100:
+                            msg = msg[:97] + "..."
+                        return msg
+
+            return "Update changes"
         else:
             return "Update changes"
     except Exception:

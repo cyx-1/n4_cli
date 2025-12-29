@@ -28,14 +28,8 @@ async def generate_commit_message(repo_path: Path) -> str:
         return "Update changes"
 
     try:
-        # Use YAML format for structured output
-        prompt = """Analyze the git changes and output YAML with this exact format:
-commit_message: "your single-line commit message here (max 50 words)"
-
-Rules:
-- Single sentence only
-- No explanations or extra text
-- Just the YAML output"""
+        # Use the exact prompt that works well
+        prompt = "suggest a commit msg no longer than 50 words in a single sentence based on the unpushed / unstaged changes in the current branch in yaml format having the key of commit_msg"
 
         proc = await asyncio.create_subprocess_shell(
             f'claude --model haiku -p "{prompt}"',
@@ -66,26 +60,31 @@ Rules:
             # Try to parse YAML
             try:
                 data = yaml.safe_load(output)
-                if isinstance(data, dict) and 'commit_message' in data:
-                    msg = str(data['commit_message']).strip()
-                    # Limit to 100 chars for table display
-                    if len(msg) > 100:
-                        msg = msg[:97] + "..."
-                    return msg
+                # Check for both 'commit_msg' and 'commit_message' keys
+                if isinstance(data, dict):
+                    msg = data.get('commit_msg') or data.get('commit_message')
+                    if msg:
+                        msg = str(msg).strip()
+                        # Limit to 100 chars for table display
+                        if len(msg) > 100:
+                            msg = msg[:97] + "..."
+                        return msg
             except yaml.YAMLError:
                 # If YAML parsing fails, try to extract message from raw output
                 # Look for lines that look like commit messages (not meta-text)
                 lines = output.split('\n')
                 for line in lines:
                     line = line.strip()
-                    if line and not line.startswith(('Based on', 'Here', 'commit_message:', '**', '-', '#', '```')):
+                    if line and not line.startswith(('Based on', 'Here', 'commit_msg:', 'commit_message:', '**', '-', '#', '```')):
                         # Check if it's a YAML key-value pair
-                        if ':' in line and line.split(':')[0].strip() == 'commit_message':
-                            # Extract value after colon
-                            msg = ':'.join(line.split(':')[1:]).strip().strip('"').strip("'").strip()
-                            if len(msg) > 100:
-                                msg = msg[:97] + "..."
-                            return msg
+                        if ':' in line:
+                            key = line.split(':')[0].strip()
+                            if key in ['commit_msg', 'commit_message']:
+                                # Extract value after colon
+                                msg = ':'.join(line.split(':')[1:]).strip().strip('"').strip("'").strip()
+                                if len(msg) > 100:
+                                    msg = msg[:97] + "..."
+                                return msg
                         # Otherwise try direct extraction
                         msg = line.strip('"').strip("'").strip()
                         if len(msg) > 20:  # Only accept if it's substantial

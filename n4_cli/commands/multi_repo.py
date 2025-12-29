@@ -13,6 +13,8 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from n4_cli.git_service import GitService, default_git_service
+
 
 def is_claude_available() -> bool:
     """Check if claude CLI is available."""
@@ -287,76 +289,57 @@ class RepoStatus:
         )
 
 
-async def run_git_async(command: str, cwd: Path) -> Tuple[int, str, str]:
-    """Run a git command asynchronously and return (returncode, stdout, stderr)."""
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd)
-        )
-        stdout, stderr = await proc.communicate()
-        return proc.returncode, stdout.decode().strip(), stderr.decode().strip()
-    except Exception as e:
-        return 1, "", str(e)
+async def run_git_async(command: str, cwd: Path, git_service: GitService = None) -> Tuple[int, str, str]:
+    """Run a git command asynchronously and return (returncode, stdout, stderr).
+
+    Deprecated: Use git_service methods directly instead.
+    This function is kept for backward compatibility with generate_commit_message.
+    """
+    if git_service is None:
+        git_service = default_git_service
+    return await git_service.run_command(command, cwd)
 
 
-async def check_repo_status(repo_path: Path) -> RepoStatus:
+async def check_repo_status(repo_path: Path, git_service: GitService = None) -> RepoStatus:
     """Check status of a single repository asynchronously."""
+    if git_service is None:
+        git_service = default_git_service
+
     status = RepoStatus(repo_path)
 
     # Check if it's a git repo
-    returncode, _, _ = await run_git_async("git rev-parse --git-dir", repo_path)
-    if returncode != 0:
+    if not await git_service.is_git_repo(repo_path):
         status.errors.append("Not a git repository")
         return status
 
     # Fetch from remote (with retry logic and exponential backoff)
-    for attempt in range(4):
-        returncode, _, stderr = await run_git_async(
-            "git fetch --all --prune",
-            repo_path
-        )
-        if returncode == 0:
-            break
-        if attempt < 3:
-            await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
-    else:
-        status.errors.append(f"Failed to fetch from remote: {stderr}")
+    fetch_success, fetch_error = await git_service.fetch_all(repo_path)
+    if not fetch_success:
+        status.errors.append(f"Failed to fetch from remote: {fetch_error}")
         return status
 
     # Get current branch
-    returncode, current_branch, _ = await run_git_async(
-        "git rev-parse --abbrev-ref HEAD",
-        repo_path
-    )
-    if returncode == 0 and current_branch:
+    current_branch = await git_service.get_current_branch(repo_path)
+    if current_branch:
         status.current_branch = current_branch
 
     # Get remote URL
-    returncode, remote_url, _ = await run_git_async(
-        "git remote get-url origin",
-        repo_path
-    )
-    if returncode == 0 and remote_url:
+    remote_url = await git_service.get_remote_url(repo_path)
+    if remote_url:
         status.remote_url = remote_url
 
     # Check for unpushed and unpulled commits
     if status.current_branch:
         # First, try to get the upstream tracking branch
-        returncode, upstream_branch, _ = await run_git_async(
-            f"git rev-parse --abbrev-ref {status.current_branch}@{{upstream}}",
-            repo_path
-        )
+        upstream_branch = await git_service.get_upstream_branch(repo_path, status.current_branch)
 
         # Determine remote branch to compare against
         remote_branch = None
-        if returncode == 0 and upstream_branch:
-            remote_branch = upstream_branch.strip()
+        if upstream_branch:
+            remote_branch = upstream_branch
         else:
             # Fallback: try origin/{current_branch}
-            returncode, _, _ = await run_git_async(
+            returncode, _, _ = await git_service.run_command(
                 f"git rev-parse --verify origin/{status.current_branch}",
                 repo_path
             )
@@ -365,125 +348,48 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
 
         if remote_branch:
             # Get commits ahead of remote (unpushed)
-            returncode, ahead_output, _ = await run_git_async(
-                f"git rev-list --count {remote_branch}..HEAD",
-                repo_path
-            )
-            if returncode == 0 and ahead_output and int(ahead_output) > 0:
-                status.ahead_of_remote = int(ahead_output)
+            ahead_count = await git_service.commits_ahead_of_remote(repo_path, remote_branch)
+            status.ahead_of_remote = ahead_count
 
             # Get unpulled commits (commits on remote but not local)
-            returncode, unpulled_output, _ = await run_git_async(
-                f"git log HEAD..{remote_branch} --pretty=format:'%H|%an|%ae|%ai|%s' --max-count=20",
-                repo_path
-            )
-            if returncode == 0 and unpulled_output:
-                # Parse commit information
-                for line in unpulled_output.split('\n'):
-                    if line.strip():
-                        parts = line.split('|')
-                        if len(parts) >= 5:
-                            status.unpulled_commits.append({
-                                'hash': parts[0][:8],  # Short hash
-                                'author': parts[1],
-                                'email': parts[2],
-                                'date': parts[3],
-                                'message': parts[4]
-                            })
+            unpulled_commits = await git_service.get_unpulled_commits(repo_path, remote_branch)
+            status.unpulled_commits = unpulled_commits
 
     # Check for uncommitted changes
-    returncode, output, _ = await run_git_async("git status --porcelain", repo_path)
-    if returncode == 0 and output:
-        status.has_uncommitted = True
-        status.changed_files = [line[3:] for line in output.split('\n') if line]
+    status.has_uncommitted = await git_service.has_uncommitted_changes(repo_path)
+    status.changed_files = await git_service.get_status_porcelain(repo_path)
 
     # Get main/master branch
-    returncode, main_branch, _ = await run_git_async(
-        "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
-        repo_path
-    )
-    if returncode != 0 or not main_branch:
-        # Fallback: check if main or master exists
-        returncode, _, _ = await run_git_async("git rev-parse --verify origin/main", repo_path)
-        main_branch = "main" if returncode == 0 else "master"
+    main_branch = await git_service.get_main_branch(repo_path)
 
     # Get all local branches
-    returncode, branches_output, _ = await run_git_async(
-        "git for-each-ref --format='%(refname:short)' refs/heads/",
-        repo_path
-    )
-    if returncode == 0 and branches_output:
-        local_branches = branches_output.split('\n')
+    local_branches = await git_service.get_local_branches(repo_path)
 
+    if local_branches:
         # Check branches that are behind remote
         for branch in local_branches:
-            # Check if remote tracking branch exists
-            returncode, _, _ = await run_git_async(
-                f"git rev-parse --verify origin/{branch}",
-                repo_path
-            )
-            if returncode != 0:
-                continue
-
-            # Get commits behind
-            returncode, behind_output, _ = await run_git_async(
-                f"git rev-list --count {branch}..origin/{branch}",
-                repo_path
-            )
-            if returncode == 0 and behind_output and int(behind_output) > 0:
-                status.behind_branches[branch] = int(behind_output)
+            behind_count = await git_service.commits_behind_remote(repo_path, branch)
+            if behind_count > 0:
+                status.behind_branches[branch] = behind_count
 
         # Check for merged branches (both local and remote)
-        # Get local branches merged into origin/main or origin/master
-        returncode, merged_output, _ = await run_git_async(
-            f"git branch --merged origin/{main_branch}",
-            repo_path
+        merged_branches = await git_service.get_merged_branches(
+            repo_path,
+            f"origin/{main_branch}",
+            include_remote=True
         )
 
-        if returncode == 0 and merged_output:
-            # Parse the output and filter branches
-            for line in merged_output.split('\n'):
-                branch = line.strip().lstrip('* ').strip()
-                if not branch:
-                    continue
-
-                # Exclude main, master, and current branch
-                if branch in ['main', 'master', status.current_branch]:
-                    continue
-
-                status.merged_branches.append(branch)
-
-        # Get remote branches merged into origin/main or origin/master
-        returncode, remote_merged_output, _ = await run_git_async(
-            f"git branch -r --merged origin/{main_branch}",
-            repo_path
-        )
-
-        if returncode == 0 and remote_merged_output:
-            # Parse the output and filter remote branches
-            for line in remote_merged_output.split('\n'):
-                branch = line.strip().lstrip('* ').strip()
-                if not branch:
-                    continue
-
-                # Exclude symbolic references like "origin/HEAD -> origin/main"
-                if '->' in branch:
-                    continue
-
-                # Exclude origin/main, origin/master, and origin/HEAD
-                if branch in [f'origin/{main_branch}', 'origin/main', 'origin/master', 'origin/HEAD']:
-                    continue
-
-                # Only include origin/ branches (not other remotes)
-                if branch.startswith('origin/'):
-                    status.merged_branches.append(branch)
+        # Filter out current branch
+        status.merged_branches = [b for b in merged_branches if b != status.current_branch]
 
     return status
 
 
-async def check_all_repos(repo_paths: List[Path]) -> List[RepoStatus]:
+async def check_all_repos(repo_paths: List[Path], git_service: GitService = None) -> List[RepoStatus]:
     """Check status of all repositories in parallel."""
-    tasks = [check_repo_status(path) for path in repo_paths]
+    if git_service is None:
+        git_service = default_git_service
+    tasks = [check_repo_status(path, git_service) for path in repo_paths]
     return await asyncio.gather(*tasks)
 
 
@@ -707,8 +613,11 @@ async def display_push_repos_with_messages(push_repos: List[RepoStatus]) -> Dict
     return repo_to_message
 
 
-async def execute_action_push(statuses: List[RepoStatus], repo_to_message: Dict[RepoStatus, str]) -> Dict[str, str]:
+async def execute_action_push(statuses: List[RepoStatus], repo_to_message: Dict[RepoStatus, str], git_service: GitService = None) -> Dict[str, str]:
     """Push changes to main/master for repos with uncommitted changes."""
+    if git_service is None:
+        git_service = default_git_service
+
     results = {}
 
     for status in statuses:
@@ -721,54 +630,39 @@ async def execute_action_push(statuses: List[RepoStatus], repo_to_message: Dict[
         commit_msg = repo_to_message.get(status, "Auto-commit: batch update")
 
         # Get main/master branch
-        returncode, main_branch, _ = await run_git_async(
-            "git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
-            repo_path
-        )
-        if returncode != 0:
-            returncode, _, _ = await run_git_async("git rev-parse --verify origin/main", repo_path)
-            main_branch = "main" if returncode == 0 else "master"
+        main_branch = await git_service.get_main_branch(repo_path)
 
         # Add all changes
-        returncode, _, stderr = await run_git_async("git add -A", repo_path)
-        if returncode != 0:
-            results[status.name] = f"Failed to add files: {stderr}"
+        add_success, add_error = await git_service.add_all(repo_path)
+        if not add_success:
+            results[status.name] = f"Failed to add files: {add_error}"
             continue
 
         # Commit changes with generated message
-        # Escape quotes in commit message
-        commit_msg_escaped = commit_msg.replace('"', '\\"')
-        returncode, _, stderr = await run_git_async(
-            f'git commit -m "{commit_msg_escaped}"',
-            repo_path
-        )
-        if returncode != 0:
-            results[status.name] = f"Failed to commit: {stderr}"
+        commit_success, commit_error = await git_service.commit(repo_path, commit_msg)
+        if not commit_success:
+            results[status.name] = f"Failed to commit: {commit_error}"
             continue
 
         # Push with retry logic
-        push_success = False
-        for attempt in range(4):
-            returncode, _, stderr = await run_git_async(
-                f"git push -u origin {status.current_branch or main_branch}",
-                repo_path
-            )
-            if returncode == 0:
-                push_success = True
-                break
-            if attempt < 3:
-                await asyncio.sleep(2 ** (attempt + 1))  # 2s, 4s, 8s
+        push_success, push_error = await git_service.push(
+            repo_path,
+            status.current_branch or main_branch
+        )
 
         if push_success:
             results[status.name] = "✓ Pushed successfully"
         else:
-            results[status.name] = f"✗ Failed to push: {stderr}"
+            results[status.name] = f"✗ Failed to push: {push_error}"
 
     return results
 
 
-async def execute_action_pull(statuses: List[RepoStatus]) -> Dict[str, str]:
+async def execute_action_pull(statuses: List[RepoStatus], git_service: GitService = None) -> Dict[str, str]:
     """Pull branches that are behind remote."""
+    if git_service is None:
+        git_service = default_git_service
+
     results = {}
 
     for status in statuses:
@@ -779,29 +673,15 @@ async def execute_action_pull(statuses: List[RepoStatus]) -> Dict[str, str]:
 
         for branch in status.behind_branches.keys():
             # Checkout branch
-            returncode, _, _ = await run_git_async(f"git checkout {branch}", repo_path)
-            if returncode != 0:
+            checkout_success, _ = await git_service.checkout(repo_path, branch)
+            if not checkout_success:
                 results[f"{status.name}/{branch}"] = "✗ Failed to checkout"
                 continue
 
             # Pull with retry logic
-            pull_success = False
-            merge_conflict = False
-            for attempt in range(4):
-                returncode, stdout, stderr = await run_git_async(
-                    f"git pull origin {branch}",
-                    repo_path
-                )
-                if returncode == 0:
-                    pull_success = True
-                    break
-                if "CONFLICT" in stdout or "CONFLICT" in stderr:
-                    merge_conflict = True
-                    break
-                if attempt < 3:
-                    await asyncio.sleep(2 ** (attempt + 1))
+            pull_success, pull_error, has_conflict = await git_service.pull(repo_path, branch)
 
-            if merge_conflict:
+            if has_conflict:
                 results[f"{status.name}/{branch}"] = "⚠ Merge conflict - handle manually"
             elif pull_success:
                 results[f"{status.name}/{branch}"] = "✓ Pulled successfully"
@@ -810,13 +690,16 @@ async def execute_action_pull(statuses: List[RepoStatus]) -> Dict[str, str]:
 
         # Return to original branch
         if status.current_branch:
-            await run_git_async(f"git checkout {status.current_branch}", repo_path)
+            await git_service.checkout(repo_path, status.current_branch)
 
     return results
 
 
-async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
+async def execute_action_prune(statuses: List[RepoStatus], git_service: GitService = None) -> Dict[str, str]:
     """Delete merged branches (both local and remote)."""
+    if git_service is None:
+        git_service = default_git_service
+
     results = {}
 
     for status in statuses:
@@ -832,32 +715,26 @@ async def execute_action_prune(statuses: List[RepoStatus]) -> Dict[str, str]:
                 branch_name = branch.replace('origin/', '', 1)
 
                 # Delete from remote
-                returncode, _, stderr = await run_git_async(
-                    f"git push origin --delete {branch_name}",
-                    repo_path
-                )
-                if returncode == 0:
+                delete_success, delete_error = await git_service.delete_remote_branch(repo_path, branch_name)
+                if delete_success:
                     results[f"{status.name}/{branch}"] = "✓ Deleted from remote"
 
                     # Clean up the remote tracking reference
-                    await run_git_async(f"git branch -d -r {branch}", repo_path)
+                    await git_service.run_command(f"git branch -d -r {branch}", repo_path)
                 else:
-                    results[f"{status.name}/{branch}"] = f"✗ Failed to delete from remote: {stderr}"
+                    results[f"{status.name}/{branch}"] = f"✗ Failed to delete from remote: {delete_error}"
             else:
                 # Delete local branch
-                returncode, _, stderr = await run_git_async(f"git branch -d {branch}", repo_path)
-                if returncode == 0:
+                delete_success, delete_error = await git_service.delete_local_branch(repo_path, branch)
+                if delete_success:
                     results[f"{status.name}/{branch}"] = "✓ Deleted locally"
 
                     # Try to delete remote branch if it exists
-                    returncode, _, _ = await run_git_async(
-                        f"git push origin --delete {branch}",
-                        repo_path
-                    )
-                    if returncode == 0:
+                    remote_delete_success, _ = await git_service.delete_remote_branch(repo_path, branch)
+                    if remote_delete_success:
                         results[f"{status.name}/{branch}"] += " and remotely"
                 else:
-                    results[f"{status.name}/{branch}"] = f"✗ Failed to delete: {stderr}"
+                    results[f"{status.name}/{branch}"] = f"✗ Failed to delete: {delete_error}"
 
     return results
 
@@ -1038,11 +915,11 @@ def multi_repo(path: Path, recursive: bool, verbose: bool, action: bool):
             click.echo(click.style(f"\n⚙️  Executing {action_type}...\n", fg="cyan"))
 
             if action_type == "push":
-                results = asyncio.run(execute_action_push(repos, repo_msg_map))
+                results = asyncio.run(execute_action_push(repos, repo_msg_map, default_git_service))
             elif action_type == "pull":
-                results = asyncio.run(execute_action_pull(statuses))
+                results = asyncio.run(execute_action_pull(statuses, default_git_service))
             elif action_type == "prune":
-                results = asyncio.run(execute_action_prune(statuses))
+                results = asyncio.run(execute_action_prune(statuses, default_git_service))
 
             all_results.update(results)
 

@@ -341,17 +341,31 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
     if returncode == 0 and remote_url:
         status.remote_url = remote_url
 
-    # Check for unpushed commits (commits ahead of upstream)
+    # Check for unpushed and unpulled commits
     if status.current_branch:
-        # Check if current branch has upstream
-        returncode, _, _ = await run_git_async(
+        # First, try to get the upstream tracking branch
+        returncode, upstream_branch, _ = await run_git_async(
             f"git rev-parse --abbrev-ref {status.current_branch}@{{upstream}}",
             repo_path
         )
-        if returncode == 0:
-            # Get commits ahead of upstream
+
+        # Determine remote branch to compare against
+        remote_branch = None
+        if returncode == 0 and upstream_branch:
+            remote_branch = upstream_branch.strip()
+        else:
+            # Fallback: try origin/{current_branch}
+            returncode, _, _ = await run_git_async(
+                f"git rev-parse --verify origin/{status.current_branch}",
+                repo_path
+            )
+            if returncode == 0:
+                remote_branch = f"origin/{status.current_branch}"
+
+        if remote_branch:
+            # Get commits ahead of remote (unpushed)
             returncode, ahead_output, _ = await run_git_async(
-                f"git rev-list --count @{{upstream}}..HEAD",
+                f"git rev-list --count {remote_branch}..HEAD",
                 repo_path
             )
             if returncode == 0 and ahead_output and int(ahead_output) > 0:
@@ -359,7 +373,7 @@ async def check_repo_status(repo_path: Path) -> RepoStatus:
 
             # Get unpulled commits (commits on remote but not local)
             returncode, unpulled_output, _ = await run_git_async(
-                f"git log HEAD..@{{upstream}} --pretty=format:'%H|%an|%ae|%ai|%s' --max-count=20",
+                f"git log HEAD..{remote_branch} --pretty=format:'%H|%an|%ae|%ai|%s' --max-count=20",
                 repo_path
             )
             if returncode == 0 and unpulled_output:

@@ -1,41 +1,99 @@
 # AutoAgent Configuration
-# This file defines tasks for automated execution using Claude or other AI agents
+# This file defines tasks for automated execution using Claude AI or shell commands
 
 version: "1.0"
 
 # Global default settings (can be overridden per task)
 defaults:
-  model: sonnet  # Options: sonnet, opus, haiku
-  agent: claude  # Options: claude, codex (agent type to use)
+  model: sonnet  # Options: sonnet, opus, haiku (for prompt tasks)
+  agent: claude  # Options: claude, codex (agent type to use for prompt tasks)
   execution_mode: sequential  # Options: sequential, parallel
   branch_strategy: separate  # Options: separate (create new branches), main (work on main)
   auto_push: false  # Whether to push to remote after successful task completion
   abort_on_failure: true  # Abort all remaining tasks if one fails
 
 # Task definitions
+# Two types of tasks are supported:
+# 1. "prompt" tasks - Send prompts to AI (default type)
+# 2. "command" tasks - Execute shell commands
+
 tasks:
+  # Example 1: AI Prompt task (default type)
   - name: Check Python version
+    type: prompt  # Optional, defaults to "prompt"
     prompt: |
       What version of Python is recommended for this project?
       Check the pyproject.toml file and provide a brief summary.
-    # Optional per-task overrides:
-    # model: opus
-    # agent: claude
-    # branch: feature/python-check  # Specific branch name (only used if branch_strategy is 'separate')
-    # depends_on: []  # List of task names this depends on (for parallel execution)
-    # auto_push: true
+    model: opus  # Override default model
+    # branch: feature/python-check
 
-  - name: List all CLI commands
-    prompt: |
-      What commands are available in this n4_cli tool?
-      List them with brief descriptions.
-    branch: feature/cli-commands
+  # Example 2: Shell Command task
+  - name: Run tests
+    type: command
+    command: pytest tests/ -v
+    working_directory: .  # Optional: specify working directory
+    timeout: 600  # Optional: timeout in seconds (default: 300)
+    # branch: feature/run-tests
 
-  - name: Suggest improvements
-    prompt: |
-      Review the project structure and suggest one improvement
-      that could be made to the CLI tool's user experience.
+  # Example 3: Build command that depends on tests
+  - name: Build project
+    type: command
+    command: python -m build
     depends_on:
-      - List all CLI commands  # This task waits for "List all CLI commands" to complete
-    share_branch_with: List all CLI commands  # Share the same branch with another task
-    auto_push: true  # Push this branch to remote after completion
+      - Run tests  # Wait for tests to pass first
+    timeout: 300
+
+  # Example 4: AI analysis after build
+  - name: Analyze build output
+    type: prompt
+    prompt: |
+      Review the build output and check if there are any warnings
+      or issues that should be addressed.
+    depends_on:
+      - Build project
+    model: sonnet
+
+  # Example 5: Mixed workflow - lint, format, then review
+  - name: Run linter
+    type: command
+    command: ruff check .
+    branch: feature/code-quality
+
+  - name: Format code
+    type: command
+    command: black .
+    share_branch_with: Run linter  # Use same branch
+    depends_on:
+      - Run linter
+
+  - name: AI code review
+    type: prompt
+    prompt: |
+      Review the recent code changes and suggest any improvements
+      for code quality, performance, or maintainability.
+    depends_on:
+      - Format code
+    share_branch_with: Run linter  # All three tasks share same branch
+    auto_push: true  # Push the branch after completion
+
+  # Example 6: Complex dependency chain
+  - name: Install dependencies
+    type: command
+    command: uv sync --all-extras
+    timeout: 600
+
+  - name: Check code coverage
+    type: command
+    command: pytest --cov=n4_cli --cov-report=term-missing
+    depends_on:
+      - Install dependencies
+    timeout: 600
+
+  - name: Generate coverage report
+    type: prompt
+    prompt: |
+      Based on the test coverage results, identify areas that need
+      more test coverage and suggest what tests to add.
+    depends_on:
+      - Check code coverage
+    model: opus

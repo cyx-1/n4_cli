@@ -29,13 +29,17 @@ class TaskAbortException(Exception):
 class TaskConfig:
     """Configuration for a single task."""
     name: str
-    prompt: str
+    task_type: str = "prompt"  # "prompt" or "command"
+    prompt: Optional[str] = None
+    command: Optional[str] = None
     model: str = "sonnet"
     agent: str = "claude"
     branch: Optional[str] = None
     depends_on: List[str] = field(default_factory=list)
     share_branch_with: Optional[str] = None
     auto_push: bool = False
+    working_directory: Optional[str] = None  # For command tasks
+    timeout: int = 300  # Timeout in seconds for command tasks
 
 
 @dataclass
@@ -97,21 +101,33 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
 
         name = task_data.get('name')
         prompt = task_data.get('prompt')
+        command = task_data.get('command')
+        task_type = task_data.get('type', 'prompt')  # Default to 'prompt'
 
         if not name:
             raise ValueError("Task missing required 'name' field")
-        if not prompt:
-            raise ValueError(f"Task '{name}' missing required 'prompt' field")
+
+        # Validate that either prompt or command is provided
+        if task_type == 'prompt' and not prompt:
+            raise ValueError(f"Task '{name}' of type 'prompt' missing required 'prompt' field")
+        if task_type == 'command' and not command:
+            raise ValueError(f"Task '{name}' of type 'command' missing required 'command' field")
+        if task_type not in ['prompt', 'command']:
+            raise ValueError(f"Task '{name}' has invalid type '{task_type}'. Must be 'prompt' or 'command'")
 
         task = TaskConfig(
             name=name,
-            prompt=prompt.strip(),
+            task_type=task_type,
+            prompt=prompt.strip() if prompt else None,
+            command=command.strip() if command else None,
             model=task_data.get('model', default_model),
             agent=task_data.get('agent', default_agent),
             branch=task_data.get('branch'),
             depends_on=task_data.get('depends_on', []),
             share_branch_with=task_data.get('share_branch_with'),
-            auto_push=task_data.get('auto_push', default_auto_push)
+            auto_push=task_data.get('auto_push', default_auto_push),
+            working_directory=task_data.get('working_directory'),
+            timeout=task_data.get('timeout', 300)
         )
         tasks.append(task)
 
@@ -130,7 +146,7 @@ async def execute_task(
     total_tasks: int,
     verbose: bool = False
 ) -> Tuple[bool, str, Optional[str]]:
-    """Execute a single task.
+    """Execute a single task (prompt or command).
 
     Args:
         task: TaskConfig to execute
@@ -143,24 +159,39 @@ async def execute_task(
         error_type can be 'rate_limit', 'auth_error', 'generic', or None
     """
     logger.info(f"🚀 Starting task {task_num}/{total_tasks}: {task.name}")
-    logger.info(f"   Model: {task.model}, Agent: {task.agent}")
+    logger.info(f"   Type: {task.task_type}")
 
     if task.branch:
         logger.info(f"   Branch: {task.branch}")
 
-    if verbose:
-        logger.info(f"   Prompt: {task.prompt[:100]}...")
-
     try:
-        # For now, we only support claude agent
-        if task.agent.lower() != 'claude':
-            logger.warning(f"⚠️  Agent '{task.agent}' not yet supported, falling back to 'claude'")
+        if task.task_type == 'command':
+            # Execute shell command
+            if verbose:
+                logger.info(f"   Command: {task.command}")
+            if task.working_directory:
+                logger.info(f"   Working directory: {task.working_directory}")
+            logger.info(f"   Timeout: {task.timeout}s")
 
-        # Execute with Claude CLI
-        success, output, error_type = await execute_claude_prompt(
-            task.prompt,
-            task.model
-        )
+            success, output, error_type = await execute_shell_command(
+                task.command,
+                task.working_directory,
+                task.timeout
+            )
+        else:
+            # Execute LLM prompt
+            logger.info(f"   Model: {task.model}, Agent: {task.agent}")
+            if verbose:
+                logger.info(f"   Prompt: {task.prompt[:100]}...")
+
+            # For now, we only support claude agent
+            if task.agent.lower() != 'claude':
+                logger.warning(f"⚠️  Agent '{task.agent}' not yet supported, falling back to 'claude'")
+
+            success, output, error_type = await execute_claude_prompt(
+                task.prompt,
+                task.model
+            )
 
         if success:
             logger.info(f"✅ Task {task_num}/{total_tasks} completed successfully: {task.name}")
@@ -175,6 +206,77 @@ async def execute_task(
         logger.error(f"❌ Task {task_num}/{total_tasks} failed with exception: {task.name}")
         logger.error(f"   Exception: {str(e)}")
         return False, str(e), 'generic'
+
+
+async def execute_shell_command(
+    command: str,
+    working_directory: Optional[str] = None,
+    timeout: int = 300
+) -> Tuple[bool, str, Optional[str]]:
+    """Execute a shell command and return the result.
+
+    Args:
+        command: The shell command to execute
+        working_directory: Optional working directory for the command
+        timeout: Timeout in seconds (default: 300)
+
+    Returns:
+        Tuple of (success: bool, output: str, error_type: Optional[str])
+    """
+    try:
+        logger.debug(f"Executing command: {command}")
+
+        # Set working directory if specified
+        cwd = working_directory if working_directory else None
+
+        # Execute command
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False, f"Command timed out after {timeout} seconds", 'timeout'
+
+        # Combine stdout and stderr
+        output = ""
+        if stdout:
+            output += stdout.decode()
+        if stderr:
+            if output:
+                output += "\n--- STDERR ---\n"
+            output += stderr.decode()
+
+        output = output.strip() if output else "Command completed with no output"
+
+        if proc.returncode == 0:
+            return True, output, None
+        else:
+            # Command failed - check for specific error patterns
+            error_type = 'generic'
+            output_lower = output.lower()
+
+            # You can add more specific error detection here
+            if 'permission denied' in output_lower:
+                error_type = 'permission_error'
+            elif 'not found' in output_lower or 'command not found' in output_lower:
+                error_type = 'command_not_found'
+
+            return False, output, error_type
+
+    except FileNotFoundError:
+        return False, f"Working directory not found: {working_directory}", 'directory_not_found'
+    except Exception as e:
+        return False, f"Command execution failed: {str(e)}", 'generic'
 
 
 async def execute_claude_prompt(prompt: str, model: str = "sonnet") -> Tuple[bool, str, Optional[str]]:

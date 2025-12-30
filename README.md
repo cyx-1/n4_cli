@@ -61,40 +61,55 @@ n4_cli autoagent --verbose
 **Configuration Format:**
 Create an `autoagent.yaml` file (see `autoagent.yaml.example` for a complete example):
 
+Two types of tasks are supported:
+1. **Prompt tasks** - Send prompts to AI (default type)
+2. **Command tasks** - Execute shell commands
+
 ```yaml
 version: "1.0"
 
 defaults:
-  model: sonnet              # sonnet, opus, haiku
-  agent: claude              # claude, codex
+  model: sonnet              # sonnet, opus, haiku (for prompt tasks)
+  agent: claude              # claude, codex (for prompt tasks)
   execution_mode: sequential # sequential or parallel
   branch_strategy: separate  # separate or main
   auto_push: false          # push to remote after success
   abort_on_failure: true    # abort all tasks on failure
 
 tasks:
+  # AI Prompt task (default type)
   - name: Check Python version
+    type: prompt  # optional, defaults to "prompt"
     prompt: |
       What version of Python is recommended for this project?
       Check the pyproject.toml file.
     model: opus  # override default
 
-  - name: List CLI commands
-    prompt: "List all available CLI commands"
-    branch: feature/cli-commands
+  # Shell Command task
+  - name: Run tests
+    type: command
+    command: pytest tests/ -v
+    timeout: 600  # optional, default: 300 seconds
+    working_directory: .  # optional
 
-  - name: Suggest improvements
-    prompt: "Review and suggest improvements"
+  # Mixed workflow with dependencies
+  - name: Analyze test results
+    type: prompt
+    prompt: "Review test results and suggest improvements"
     depends_on:
-      - List CLI commands  # waits for this task
-    share_branch_with: List CLI commands
+      - Run tests  # waits for command to complete
+    share_branch_with: Run tests
     auto_push: true
 ```
 
 **Features:**
+- 🔧 **Dual task types** - AI prompts AND shell commands in the same workflow
 - ⚡ **Parallel execution** - run independent tasks simultaneously
 - 🔗 **Task dependencies** - define which tasks must complete before others
 - 🤖 **Multiple AI models** - choose between sonnet, opus, or haiku per task
+- 💻 **Shell command execution** - run tests, builds, linters, and more
+- ⏱️ **Command timeouts** - configurable timeouts for long-running commands
+- 📁 **Working directories** - specify where commands should execute
 - 🌿 **Branch management** - automatic branch creation and sharing
 - 🚀 **Auto-push** - optionally push changes to remote after completion
 - ⚠️ **Smart error handling** - auto-abort on rate limits, configurable failure behavior

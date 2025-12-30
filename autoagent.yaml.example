@@ -1,0 +1,41 @@
+# AutoAgent Configuration
+# This file defines tasks for automated execution using Claude or other AI agents
+
+version: "1.0"
+
+# Global default settings (can be overridden per task)
+defaults:
+  model: sonnet  # Options: sonnet, opus, haiku
+  agent: claude  # Options: claude, codex (agent type to use)
+  execution_mode: sequential  # Options: sequential, parallel
+  branch_strategy: separate  # Options: separate (create new branches), main (work on main)
+  auto_push: false  # Whether to push to remote after successful task completion
+  abort_on_failure: true  # Abort all remaining tasks if one fails
+
+# Task definitions
+tasks:
+  - name: Check Python version
+    prompt: |
+      What version of Python is recommended for this project?
+      Check the pyproject.toml file and provide a brief summary.
+    # Optional per-task overrides:
+    # model: opus
+    # agent: claude
+    # branch: feature/python-check  # Specific branch name (only used if branch_strategy is 'separate')
+    # depends_on: []  # List of task names this depends on (for parallel execution)
+    # auto_push: true
+
+  - name: List all CLI commands
+    prompt: |
+      What commands are available in this n4_cli tool?
+      List them with brief descriptions.
+    branch: feature/cli-commands
+
+  - name: Suggest improvements
+    prompt: |
+      Review the project structure and suggest one improvement
+      that could be made to the CLI tool's user experience.
+    depends_on:
+      - List all CLI commands  # This task waits for "List all CLI commands" to complete
+    share_branch_with: List all CLI commands  # Share the same branch with another task
+    auto_push: true  # Push this branch to remote after completion

@@ -27,7 +27,7 @@ class TaskConfig:
     """Configuration for a single task."""
 
     name: str
-    task_type: str = "prompt"  # "prompt" or "command"
+    task_type: str = "prompt"  # "prompt", "command", or "goto"
     prompt: Optional[str] = None
     command: Optional[str] = None
     model: str = "sonnet"
@@ -39,6 +39,8 @@ class TaskConfig:
     working_directory: Optional[str] = None  # For command tasks
     timeout: int = 300  # Timeout in seconds for command tasks
     execution_step: int = 1  # Tasks with same step run in parallel, lower steps run first
+    goto_step: Optional[int] = None  # For goto tasks: step number to jump to
+    prompt_flags: Optional[str] = None  # For prompt tasks: additional CLI flags for claude command
 
 
 @dataclass
@@ -107,13 +109,25 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
         if not name:
             raise ValueError("Task missing required 'name' field")
 
-        # Validate that either prompt or command is provided
+        # Get goto_step for goto tasks
+        goto_step = task_data.get('goto_step')
+
+        # Validate that either prompt or command is provided based on task type
         if task_type == 'prompt' and not prompt:
             raise ValueError(f"Task '{name}' of type 'prompt' missing required 'prompt' field")
         if task_type == 'command' and not command:
             raise ValueError(f"Task '{name}' of type 'command' missing required 'command' field")
-        if task_type not in ['prompt', 'command']:
-            raise ValueError(f"Task '{name}' has invalid type '{task_type}'. Must be 'prompt' or 'command'")
+        if task_type == 'goto' and goto_step is None:
+            raise ValueError(f"Task '{name}' of type 'goto' missing required 'goto_step' field")
+        if task_type == 'goto' and not isinstance(goto_step, int):
+            raise ValueError(f"Task '{name}' has invalid 'goto_step' value. Must be an integer")
+        if task_type not in ['prompt', 'command', 'goto']:
+            raise ValueError(f"Task '{name}' has invalid type '{task_type}'. Must be 'prompt', 'command', or 'goto'")
+
+        # Get prompt_flags for prompt tasks
+        prompt_flags = task_data.get('prompt_flags')
+        if prompt_flags is not None and not isinstance(prompt_flags, str):
+            raise ValueError(f"Task '{name}' has invalid 'prompt_flags' value. Must be a string")
 
         task = TaskConfig(
             name=name,
@@ -129,6 +143,8 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             working_directory=task_data.get('working_directory'),
             timeout=task_data.get('timeout', 300),
             execution_step=task_data.get('execution_step', 1),
+            goto_step=goto_step,
+            prompt_flags=prompt_flags.strip() if prompt_flags else None,
         )
         tasks.append(task)
 
@@ -138,7 +154,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
 
 
 async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbose: bool = False) -> Tuple[bool, str, Optional[str]]:
-    """Execute a single task (prompt or command).
+    """Execute a single task (prompt, command, or goto).
 
     Args:
         task: TaskConfig to execute
@@ -148,7 +164,8 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
 
     Returns:
         Tuple of (success: bool, output: str, error_type: Optional[str])
-        error_type can be 'rate_limit', 'auth_error', 'generic', or None
+        error_type can be 'rate_limit', 'auth_error', 'generic', 'goto', or None
+        For goto tasks, error_type is 'goto' and output contains the step number to jump to
     """
     logger.info(f"🚀 Starting task {task_num}/{total_tasks}: {task.name}")
     logger.info(f"   Type: {task.task_type}")
@@ -157,7 +174,11 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
         logger.info(f"   Branch: {task.branch}")
 
     try:
-        if task.task_type == 'command':
+        if task.task_type == 'goto':
+            # Goto task - signal to jump to specified step
+            logger.info(f"   Goto step: {task.goto_step}")
+            return True, str(task.goto_step), 'goto'
+        elif task.task_type == 'command':
             # Execute shell command
             if verbose:
                 logger.info(f"   Command: {task.command}")
@@ -169,6 +190,8 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
         else:
             # Execute LLM prompt
             logger.info(f"   Model: {task.model}, Agent: {task.agent}")
+            if task.prompt_flags:
+                logger.info(f"   Prompt flags: {task.prompt_flags}")
             if verbose:
                 logger.info(f"   Prompt: {task.prompt[:100]}...")
 
@@ -176,7 +199,7 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
             if task.agent.lower() != 'claude':
                 logger.warning(f"⚠️  Agent '{task.agent}' not yet supported, falling back to 'claude'")
 
-            success, output, error_type = await execute_claude_prompt(task.prompt, task.model)
+            success, output, error_type = await execute_claude_prompt(task.prompt, task.model, task.prompt_flags)
 
         if success:
             logger.info(f"✅ Task {task_num}/{total_tasks} completed successfully: {task.name}")
@@ -252,12 +275,13 @@ async def execute_shell_command(command: str, working_directory: Optional[str] =
         return False, f"Command execution failed: {str(e)}", 'generic'
 
 
-async def execute_claude_prompt(prompt: str, model: str = "sonnet") -> Tuple[bool, str, Optional[str]]:
+async def execute_claude_prompt(prompt: str, model: str = "sonnet", prompt_flags: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
     """Execute a Claude prompt and return the result.
 
     Args:
         prompt: The prompt to send to Claude
         model: The model to use (sonnet, opus, haiku)
+        prompt_flags: Optional additional CLI flags for the claude command
 
     Returns:
         Tuple of (success: bool, output: str, error_type: Optional[str])
@@ -266,9 +290,19 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet") -> Tuple[boo
         # Escape double quotes in prompt
         escaped_prompt = prompt.replace('"', '\\"').replace('$', '\\$')
 
-        cmd = f'claude --permission-mode acceptEdits --model {model} -p "{escaped_prompt}"'
+        # Build command with optional flags
+        # Default flags that are always included
+        base_cmd = f'claude --model {model}'
 
-        logger.debug(f"Executing command: claude --permission-mode acceptEdits --model {model} -p [prompt]")
+        # Add custom prompt_flags if provided, otherwise use default permission mode
+        if prompt_flags:
+            base_cmd = f'{base_cmd} {prompt_flags}'
+        else:
+            base_cmd = f'{base_cmd} --permission-mode acceptEdits'
+
+        cmd = f'{base_cmd} -p "{escaped_prompt}"'
+
+        logger.debug(f"Executing command: {base_cmd} -p [prompt]")
 
         proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await proc.communicate()
@@ -450,6 +484,7 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
     """Run tasks grouped by execution_step.
 
     Tasks with the same execution_step run in parallel. Steps are executed in order.
+    Supports goto tasks that can jump to a specific execution step.
 
     Args:
         batches: List of task batches (tasks in same step run in parallel)
@@ -459,9 +494,20 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
     total_tasks = sum(len(batch) for batch in batches)
     logger.info(f"⚡ Starting step-based execution of {total_tasks} task(s) in {len(batches)} step(s)")
 
-    completed_count = 0
+    # Build a mapping of execution_step to batch index for goto support
+    step_to_batch_idx: Dict[int, int] = {}
+    for idx, batch in enumerate(batches):
+        # All tasks in a batch have the same execution_step
+        if batch:
+            step_to_batch_idx[batch[0].execution_step] = idx
 
-    for step_num, batch in enumerate(batches, 1):
+    completed_count = 0
+    batch_idx = 0
+
+    while batch_idx < len(batches):
+        batch = batches[batch_idx]
+        step_num = batch_idx + 1
+
         click.echo(click.style(f"\n{'='*80}", fg="cyan"))
         if len(batch) == 1:
             click.echo(click.style(f"Step {step_num}/{len(batches)}: {batch[0].name}", fg="cyan", bold=True))
@@ -472,6 +518,9 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
 
         # Execute all tasks in this step concurrently
         results = await asyncio.gather(*[execute_task(task, completed_count + i + 1, total_tasks, verbose) for i, task in enumerate(batch)], return_exceptions=True)
+
+        # Track if we need to goto a different step
+        goto_target_step: Optional[int] = None
 
         # Process results
         for i, (task, result) in enumerate(zip(batch, results)):
@@ -487,6 +536,12 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
                     raise TaskAbortException(f"Task '{task.name}' failed with exception")
             else:
                 success, output, error_type = result
+
+                # Handle goto task
+                if error_type == 'goto' and success:
+                    goto_target_step = int(output)
+                    click.echo(click.style(f"\n🔀 Goto: Jumping to step {goto_target_step}", fg="yellow", bold=True))
+                    continue
 
                 if success:
                     click.echo(click.style(f"\n✅ Task completed successfully!", fg="green", bold=True))
@@ -507,6 +562,18 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
                         raise TaskAbortException(f"Task '{task.name}' failed")
 
         completed_count += len(batch)
+
+        # Handle goto: jump to the target step if specified
+        if goto_target_step is not None:
+            if goto_target_step in step_to_batch_idx:
+                batch_idx = step_to_batch_idx[goto_target_step]
+                logger.info(f"🔀 Jumping to execution_step {goto_target_step} (batch index {batch_idx})")
+            else:
+                # Target step doesn't exist - warn and continue normally
+                logger.warning(f"⚠️  Goto target step {goto_target_step} not found, continuing to next step")
+                batch_idx += 1
+        else:
+            batch_idx += 1
 
 
 @click.command(name="autoagent")

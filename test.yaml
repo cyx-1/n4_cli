@@ -4,24 +4,101 @@ version: "1.0"
 defaults:
   model: sonnet  # Options: sonnet, opus, haiku (for prompt tasks)
   agent: claude  # Options: claude, codex (agent type to use for prompt tasks)
-  execution_mode: sequential # Options: sequential, parallel
   branch_strategy: separate  # Options: separate (create new branches), main (work on main)
   auto_push: false  # Whether to push to remote after successful task completion
   abort_on_failure: true  # Abort all remaining tasks if one fails
 
 tasks:
+  # Step 1: Make code changes with custom prompt flags
   - name: Make code changes
-    type: prompt  # Optional, defaults to "prompt"
+    type: prompt
     prompt: |
       make changes to this project so that instead of specifying execution_mode of parallel or sequential
-      we specify exectuion_step with a number value instead. all tasks with execution_step of 1 will execute in parallel
-      all tasks with execution_step of 2 will also execute in parallle but only after step 1 is complete
-    model: opus # Override default model
+      we specify execution_step with a number value instead. all tasks with execution_step of 1 will execute in parallel
+      all tasks with execution_step of 2 will also execute in parallel but only after step 1 is complete
+    model: opus
+    prompt_flags: "--permission-mode acceptEdits"  # Custom flags for claude CLI
+    execution_step: 1
 
+  # Step 2: Run tests
   - name: Run tests
     type: command
     depends_on:
       - Make code changes
     command: uv run pytest tests/ -v
-    working_directory: .  # Optional: specify working directory
-    timeout: 600  # Optional: timeout in seconds (default: 300)
+    working_directory: .
+    timeout: 600
+    execution_step: 2
+
+  # Step 3: Goto task example - jump to step 1 to re-run (creates a loop)
+  # NOTE: In practice, you'd want conditional logic to avoid infinite loops
+  # This example shows the syntax - use with caution!
+  - name: Jump back to step 1
+    type: goto
+    goto_step: 1  # Required: the execution_step number to jump to
+    execution_step: 3
+
+# =============================================================================
+# PROMPT_FLAGS DOCUMENTATION
+# =============================================================================
+# The 'prompt_flags' field allows you to specify additional CLI flags for the
+# claude command when running prompt tasks.
+#
+# Usage:
+#   prompt_flags: "--flag1 --flag2 value"
+#
+# Common flags you might use:
+#   --permission-mode acceptEdits    Accept all edit permissions
+#   --permission-mode bypassPermissions    Bypass all permission checks
+#   --chrome                         Enable Chrome/browser integration
+#   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
+#
+# Examples:
+#
+# 1. Basic permission mode:
+#    - name: Make changes
+#      type: prompt
+#      prompt: "Update the README"
+#      prompt_flags: "--permission-mode acceptEdits"
+#
+# 2. Multiple flags:
+#    - name: Complex task
+#      type: prompt
+#      prompt: "Implement feature X"
+#      prompt_flags: "--chrome --permission-mode acceptEdits"
+#
+# NOTE: If prompt_flags is not specified, the default "--permission-mode acceptEdits"
+# is used automatically.
+
+# =============================================================================
+# GOTO TASK TYPE DOCUMENTATION
+# =============================================================================
+# The 'goto' task type allows you to jump to a specific execution step.
+# This is useful for:
+#   - Creating retry loops
+#   - Implementing conditional workflows (combined with command tasks that check conditions)
+#   - Skipping steps based on previous results
+#
+# Required fields for goto tasks:
+#   - name: Task name (required for all tasks)
+#   - type: goto
+#   - goto_step: The execution_step number to jump to (integer)
+#   - execution_step: When this goto task should run
+#
+# Example usage patterns:
+#
+# 1. Simple jump forward (skip steps):
+#    - name: Skip to deployment
+#      type: goto
+#      goto_step: 5
+#      execution_step: 2
+#
+# 2. Jump backward (retry/loop):
+#    - name: Retry build
+#      type: goto
+#      goto_step: 1
+#      execution_step: 3
+#
+# WARNING: Be careful with goto tasks that jump backward - they can create
+# infinite loops. Consider using command tasks to check conditions before
+# deciding whether to continue or jump.

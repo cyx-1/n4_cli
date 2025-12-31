@@ -12,9 +12,11 @@ defaults:
   abort_on_failure: true  # Abort all remaining tasks if one fails
 
 # Task definitions
-# Two types of tasks are supported:
+# Four types of tasks are supported:
 # 1. "prompt" tasks - Send prompts to AI (default type)
 # 2. "command" tasks - Execute shell commands
+# 3. "goto" tasks - Jump to a specific execution step (for loops/conditionals)
+# 4. "prepare_next_prompt" tasks - Process a plan file to manage multi-step prompts
 #
 # Execution order is controlled by the execution_step field:
 # - Tasks with the same execution_step run in parallel
@@ -71,3 +73,51 @@ tasks:
     execution_step: 5
     model: sonnet
     auto_push: true  # Push after completion
+
+# ============================================================================
+# ADVANCED EXAMPLES: Looping with prepare_next_prompt and goto
+# ============================================================================
+# The following example demonstrates how to create a loop that processes
+# multiple prompts from a plan file. This is useful for:
+# - Multi-step implementations where each step should be committed
+# - Iterative refactoring tasks
+# - Processing a list of related tasks sequentially
+#
+# Plan file format (plan.yaml):
+# ```yaml
+# prompts:
+#   - prompt: "Implement user authentication"
+#     status: incomplete
+#   - prompt: "Add password reset functionality"
+#     status: incomplete
+#   - prompt: "Create user profile page"
+#     status: incomplete
+# ```
+#
+# The prepare_next_prompt task:
+# 1. Marks the first incomplete prompt as complete
+# 2. Saves the plan file with updated status
+# 3. Writes the next incomplete prompt to the prompt_file
+# 4. Returns 'no_more_prompts' error_type when all prompts are done
+#
+# Example workflow that loops through all prompts in a plan file:
+#
+#   - name: Prepare next task
+#     type: prepare_next_prompt
+#     plan_file: plan.yaml        # YAML file with prompts and their status
+#     prompt_file: current.txt    # File where the next prompt will be written
+#     execution_step: 10
+#
+#   - name: Execute current task
+#     type: prompt
+#     prompt_file: current.txt    # Load the prompt from the file
+#     execution_step: 11
+#     model: opus
+#
+#   - name: Loop back
+#     type: goto
+#     goto_step: 10               # Jump back to step 10 to process next prompt
+#     execution_step: 12
+#
+# Note: The loop continues until prepare_next_prompt returns 'no_more_prompts',
+# which indicates all prompts in the plan file have been completed.

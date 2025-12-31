@@ -27,7 +27,7 @@ class TaskConfig:
     """Configuration for a single task."""
 
     name: str
-    task_type: str = "prompt"  # "prompt", "command", or "goto"
+    task_type: str = "prompt"  # "prompt", "command", "goto", or "prepare_next_prompt"
     prompt: Optional[str] = None
     prompt_file: Optional[str] = None  # For prompt tasks: path to file containing prompt
     command: Optional[str] = None
@@ -42,6 +42,7 @@ class TaskConfig:
     execution_step: int = 1  # Tasks with same step run in parallel, lower steps run first
     goto_step: Optional[int] = None  # For goto tasks: step number to jump to
     prompt_flags: Optional[str] = None  # For prompt tasks: additional CLI flags for claude command
+    plan_file: Optional[str] = None  # For prepare_next_prompt tasks: path to YAML file with prompts
 
 
 @dataclass
@@ -138,8 +139,17 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             raise ValueError(f"Task '{name}' of type 'goto' missing required 'goto_step' field")
         if task_type == 'goto' and not isinstance(goto_step, int):
             raise ValueError(f"Task '{name}' has invalid 'goto_step' value. Must be an integer")
-        if task_type not in ['prompt', 'command', 'goto']:
-            raise ValueError(f"Task '{name}' has invalid type '{task_type}'. Must be 'prompt', 'command', or 'goto'")
+
+        # Get plan_file for prepare_next_prompt tasks
+        plan_file = task_data.get('plan_file')
+        if task_type == 'prepare_next_prompt':
+            if not plan_file:
+                raise ValueError(f"Task '{name}' of type 'prepare_next_prompt' missing required 'plan_file' field")
+            if not prompt_file:
+                raise ValueError(f"Task '{name}' of type 'prepare_next_prompt' missing required 'prompt_file' field")
+
+        if task_type not in ['prompt', 'command', 'goto', 'prepare_next_prompt']:
+            raise ValueError(f"Task '{name}' has invalid type '{task_type}'. Must be 'prompt', 'command', 'goto', or 'prepare_next_prompt'")
 
         # Get prompt_flags for prompt tasks
         prompt_flags = task_data.get('prompt_flags')
@@ -163,6 +173,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             execution_step=task_data.get('execution_step', 1),
             goto_step=goto_step,
             prompt_flags=prompt_flags.strip() if prompt_flags else None,
+            plan_file=plan_file,
         )
         tasks.append(task)
 
@@ -172,7 +183,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
 
 
 async def execute_task(task: TaskConfig, step_num: int, total_steps: int, verbose: bool = False) -> Tuple[bool, str, Optional[str]]:
-    """Execute a single task (prompt, command, or goto).
+    """Execute a single task (prompt, command, goto, or prepare_next_prompt).
 
     Args:
         task: TaskConfig to execute
@@ -182,7 +193,7 @@ async def execute_task(task: TaskConfig, step_num: int, total_steps: int, verbos
 
     Returns:
         Tuple of (success: bool, output: str, error_type: Optional[str])
-        error_type can be 'rate_limit', 'auth_error', 'generic', 'goto', or None
+        error_type can be 'rate_limit', 'auth_error', 'generic', 'goto', 'no_more_prompts', or None
         For goto tasks, error_type is 'goto' and output contains the step number to jump to
     """
     logger.info(f"🚀 Starting step {step_num}/{total_steps}: {task.name}")
@@ -196,6 +207,11 @@ async def execute_task(task: TaskConfig, step_num: int, total_steps: int, verbos
             # Goto task - signal to jump to specified step
             logger.info(f"   Goto step: {task.goto_step}")
             return True, str(task.goto_step), 'goto'
+        elif task.task_type == 'prepare_next_prompt':
+            # Prepare next prompt task - mark current complete and save next to file
+            logger.info(f"   Plan file: {task.plan_file}")
+            logger.info(f"   Prompt file: {task.prompt_file}")
+            success, output, error_type = await execute_prepare_next_prompt(task.plan_file, task.prompt_file)
         elif task.task_type == 'command':
             # Execute shell command
             if verbose:
@@ -351,6 +367,105 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet", prompt_flags
 
     except Exception as e:
         return False, str(e), 'generic'
+
+
+async def execute_prepare_next_prompt(plan_file: str, prompt_file: str) -> Tuple[bool, str, Optional[str]]:
+    """Execute prepare_next_prompt: mark current prompt complete and save next prompt to file.
+
+    The plan_file is a YAML file with the following structure:
+    ```yaml
+    prompts:
+      - prompt: "First prompt text"
+        status: complete
+      - prompt: "Second prompt text"
+        status: incomplete
+      - prompt: "Third prompt text"
+        status: incomplete
+    ```
+
+    This function:
+    1. Finds the first incomplete prompt and marks it as complete
+    2. Saves the updated plan_file
+    3. Finds the next incomplete prompt and writes it to prompt_file
+    4. If no more incomplete prompts, returns success with 'no_more_prompts' error type
+
+    Args:
+        plan_file: Path to YAML file containing prompts with status
+        prompt_file: Path to file where the next prompt will be written
+
+    Returns:
+        Tuple of (success: bool, output: str, error_type: Optional[str])
+        error_type can be 'no_more_prompts' when all prompts are complete
+    """
+    try:
+        plan_path = Path(plan_file)
+        prompt_path = Path(prompt_file)
+
+        # Read the plan file
+        if not plan_path.exists():
+            return False, f"Plan file not found: {plan_file}", 'file_not_found'
+
+        with open(plan_path, 'r') as f:
+            plan_data = yaml.safe_load(f)
+
+        if not plan_data or 'prompts' not in plan_data:
+            return False, f"Invalid plan file format: missing 'prompts' key", 'invalid_format'
+
+        prompts = plan_data['prompts']
+        if not isinstance(prompts, list):
+            return False, f"Invalid plan file format: 'prompts' must be a list", 'invalid_format'
+
+        # Find the first incomplete prompt and mark it as complete
+        first_incomplete_idx = None
+        for idx, item in enumerate(prompts):
+            if not isinstance(item, dict):
+                return False, f"Invalid prompt entry at index {idx}: must be a dictionary", 'invalid_format'
+            if item.get('status') != 'complete':
+                first_incomplete_idx = idx
+                break
+
+        if first_incomplete_idx is None:
+            # All prompts are already complete
+            # Clear the prompt file to indicate no more work
+            with open(prompt_path, 'w') as f:
+                f.write("")
+            return True, "All prompts already complete", 'no_more_prompts'
+
+        # Mark the first incomplete prompt as complete
+        prompts[first_incomplete_idx]['status'] = 'complete'
+        completed_prompt = prompts[first_incomplete_idx].get('prompt', '[no prompt text]')
+        logger.info(f"   ✅ Marked prompt {first_incomplete_idx + 1} as complete")
+
+        # Save the updated plan file
+        with open(plan_path, 'w') as f:
+            yaml.dump(plan_data, f, default_flow_style=False, allow_unicode=True)
+        logger.info(f"   💾 Updated plan file: {plan_file}")
+
+        # Find the next incomplete prompt
+        next_incomplete_idx = None
+        for idx, item in enumerate(prompts):
+            if item.get('status') != 'complete':
+                next_incomplete_idx = idx
+                break
+
+        if next_incomplete_idx is None:
+            # No more incomplete prompts
+            with open(prompt_path, 'w') as f:
+                f.write("")
+            return True, f"Completed prompt {first_incomplete_idx + 1}. No more prompts remaining.", 'no_more_prompts'
+
+        # Write the next prompt to prompt_file
+        next_prompt = prompts[next_incomplete_idx].get('prompt', '')
+        with open(prompt_path, 'w') as f:
+            f.write(next_prompt)
+        logger.info(f"   📝 Wrote next prompt ({next_incomplete_idx + 1}) to: {prompt_file}")
+
+        return True, f"Completed prompt {first_incomplete_idx + 1}. Next prompt ({next_incomplete_idx + 1}) saved to {prompt_file}", None
+
+    except yaml.YAMLError as e:
+        return False, f"Failed to parse plan file: {e}", 'yaml_error'
+    except Exception as e:
+        return False, f"Error in prepare_next_prompt: {str(e)}", 'generic'
 
 
 def build_dependency_graph(tasks: List[TaskConfig]) -> Dict[str, Set[str]]:

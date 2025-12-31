@@ -264,9 +264,9 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet") -> Tuple[boo
         # Escape double quotes in prompt
         escaped_prompt = prompt.replace('"', '\\"').replace('$', '\\$')
 
-        cmd = f'claude --dangerously-skip-user-approval --model {model} -p "{escaped_prompt}"'
+        cmd = f'claude --permission-mode acceptEdits --model {model} -p "{escaped_prompt}"'
 
-        logger.debug(f"Executing command: claude --dangerously-skip-user-approval --model {model} -p [prompt]")
+        logger.debug(f"Executing command: claude --permission-mode acceptEdits --model {model} -p [prompt]")
 
         proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await proc.communicate()

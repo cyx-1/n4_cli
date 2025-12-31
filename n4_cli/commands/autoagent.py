@@ -29,6 +29,7 @@ class TaskConfig:
     name: str
     task_type: str = "prompt"  # "prompt", "command", or "goto"
     prompt: Optional[str] = None
+    prompt_file: Optional[str] = None  # For prompt tasks: path to file containing prompt
     command: Optional[str] = None
     model: str = "sonnet"
     agent: str = "claude"
@@ -103,6 +104,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
 
         name = task_data.get('name')
         prompt = task_data.get('prompt')
+        prompt_file = task_data.get('prompt_file')
         command = task_data.get('command')
         task_type = task_data.get('type', 'prompt')  # Default to 'prompt'
 
@@ -112,9 +114,24 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
         # Get goto_step for goto tasks
         goto_step = task_data.get('goto_step')
 
-        # Validate that either prompt or command is provided based on task type
-        if task_type == 'prompt' and not prompt:
-            raise ValueError(f"Task '{name}' of type 'prompt' missing required 'prompt' field")
+        # Validate that either prompt or prompt_file is provided for prompt tasks
+        if task_type == 'prompt':
+            if prompt and prompt_file:
+                raise ValueError(f"Task '{name}' cannot have both 'prompt' and 'prompt_file' - use only one")
+            if not prompt and not prompt_file:
+                raise ValueError(f"Task '{name}' of type 'prompt' requires either 'prompt' or 'prompt_file' field")
+
+            # If prompt_file is specified, read the file content
+            if prompt_file:
+                prompt_file_path = Path(prompt_file)
+                if not prompt_file_path.exists():
+                    raise ValueError(f"Task '{name}' prompt_file not found: {prompt_file}")
+                try:
+                    with open(prompt_file_path, 'r') as pf:
+                        prompt = pf.read()
+                    logger.info(f"   📄 Loaded prompt from file: {prompt_file}")
+                except Exception as e:
+                    raise ValueError(f"Task '{name}' failed to read prompt_file '{prompt_file}': {e}")
         if task_type == 'command' and not command:
             raise ValueError(f"Task '{name}' of type 'command' missing required 'command' field")
         if task_type == 'goto' and goto_step is None:
@@ -133,6 +150,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             name=name,
             task_type=task_type,
             prompt=prompt.strip() if prompt else None,
+            prompt_file=prompt_file,
             command=command.strip() if command else None,
             model=task_data.get('model', default_model),
             agent=task_data.get('agent', default_agent),
@@ -190,10 +208,16 @@ async def execute_task(task: TaskConfig, step_num: int, total_steps: int, verbos
         else:
             # Execute LLM prompt
             logger.info(f"   Model: {task.model}, Agent: {task.agent}")
+            if task.prompt_file:
+                logger.info(f"   Prompt file: {task.prompt_file}")
             if task.prompt_flags:
                 logger.info(f"   Prompt flags: {task.prompt_flags}")
-            if verbose:
-                logger.info(f"   Prompt: {task.prompt[:100]}...")
+
+            # Always print the full prompt to console
+            click.echo(click.style(f"\n📝 Prompt:", fg="blue", bold=True))
+            click.echo(click.style("-" * 40, fg="blue"))
+            click.echo(task.prompt)
+            click.echo(click.style("-" * 40, fg="blue"))
 
             # For now, we only support claude agent
             if task.agent.lower() != 'claude':

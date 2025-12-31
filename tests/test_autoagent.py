@@ -311,7 +311,7 @@ tasks:
   - name: "Task 1"
 """)
 
-        with pytest.raises(ValueError, match="Task 'Task 1' of type 'prompt' missing required 'prompt' field"):
+        with pytest.raises(ValueError, match="Task 'Task 1' of type 'prompt' requires either 'prompt' or 'prompt_file' field"):
             parse_yaml_config(config_file)
 
     def test_parse_defaults_applied(self, tmp_path):
@@ -1355,3 +1355,139 @@ tasks:
                 "sonnet",
                 "--chrome --dangerously-skip-permissions"
             )
+
+
+class TestPromptFile:
+    """Tests for prompt_file functionality."""
+
+    def test_parse_prompt_file(self, tmp_path):
+        """Test parsing a task with prompt_file."""
+        # Create a prompt file
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("This is a prompt from a file.\nWith multiple lines.")
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(f"""
+version: "1.0"
+tasks:
+  - name: "Task with prompt file"
+    type: prompt
+    prompt_file: "{prompt_file}"
+""")
+
+        config = parse_yaml_config(config_file)
+
+        assert len(config.tasks) == 1
+        assert config.tasks[0].name == "Task with prompt file"
+        assert config.tasks[0].prompt_file == str(prompt_file)
+        assert config.tasks[0].prompt == "This is a prompt from a file.\nWith multiple lines."
+
+    def test_parse_prompt_file_not_found(self, tmp_path):
+        """Test parsing a task with non-existent prompt_file."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("""
+version: "1.0"
+tasks:
+  - name: "Task with missing file"
+    type: prompt
+    prompt_file: "/nonexistent/prompt.md"
+""")
+
+        with pytest.raises(ValueError, match="prompt_file not found"):
+            parse_yaml_config(config_file)
+
+    def test_parse_prompt_and_prompt_file_both_provided(self, tmp_path):
+        """Test parsing a task with both prompt and prompt_file raises error."""
+        # Create a prompt file
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("Prompt from file")
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(f"""
+version: "1.0"
+tasks:
+  - name: "Task with both"
+    type: prompt
+    prompt: "Inline prompt"
+    prompt_file: "{prompt_file}"
+""")
+
+        with pytest.raises(ValueError, match="cannot have both 'prompt' and 'prompt_file'"):
+            parse_yaml_config(config_file)
+
+    def test_parse_neither_prompt_nor_prompt_file(self, tmp_path):
+        """Test parsing a prompt task with neither prompt nor prompt_file raises error."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("""
+version: "1.0"
+tasks:
+  - name: "Task with neither"
+    type: prompt
+""")
+
+        with pytest.raises(ValueError, match="requires either 'prompt' or 'prompt_file' field"):
+            parse_yaml_config(config_file)
+
+    def test_prompt_file_task_config(self):
+        """Test creating TaskConfig with prompt_file."""
+        task = TaskConfig(
+            name="Test task",
+            prompt="Content from file",
+            prompt_file="./tmp/prompt.md"
+        )
+
+        assert task.prompt_file == "./tmp/prompt.md"
+        assert task.prompt == "Content from file"
+
+    def test_prompt_file_default_none(self):
+        """Test that prompt_file defaults to None."""
+        task = TaskConfig(
+            name="Test task",
+            prompt="Do something"
+        )
+
+        assert task.prompt_file is None
+
+    def test_parse_prompt_file_relative_path(self, tmp_path):
+        """Test parsing a task with relative path prompt_file."""
+        import os
+
+        # Create a prompt file
+        prompt_file = tmp_path / "prompts" / "task.md"
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text("Relative path prompt content")
+
+        config_file = tmp_path / "config.yaml"
+        # Use relative path from tmp_path
+        config_file.write_text(f"""
+version: "1.0"
+tasks:
+  - name: "Task with relative path"
+    type: prompt
+    prompt_file: "{prompt_file}"
+""")
+
+        config = parse_yaml_config(config_file)
+
+        assert config.tasks[0].prompt == "Relative path prompt content"
+
+    def test_parse_prompt_file_with_prompt_flags(self, tmp_path):
+        """Test parsing a task with both prompt_file and prompt_flags."""
+        # Create a prompt file
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("Prompt from file with flags")
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(f"""
+version: "1.0"
+tasks:
+  - name: "Task with file and flags"
+    type: prompt
+    prompt_file: "{prompt_file}"
+    prompt_flags: "--chrome --permission-mode acceptEdits"
+""")
+
+        config = parse_yaml_config(config_file)
+
+        assert config.tasks[0].prompt == "Prompt from file with flags"
+        assert config.tasks[0].prompt_flags == "--chrome --permission-mode acceptEdits"

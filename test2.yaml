@@ -16,19 +16,26 @@ tasks:
       calculate 1 + 1
     model: haiku # Override default model
     execution_step: 1  # Runs in parallel with Format code
-
+  - name: check-claude-usage
+    prompt: |
+      open https://claude.ai/settings/usage page, 
+      and tell me what percentage is used for the current session, and when does it reset. 
+      return the result in yaml with two keys: plan_usage_limit_session_pct and plan_usage_limit_reset_time. 
+      plan_usage_limit_session_pct holds a numeric value, plan_usage_limit_reset_time holds a ISO timestamp in my machine's timezone. 
+      Save the yaml into a file called ./tmp/claude_usage.yaml
+    prompt_flags: --chrome --permission-mode acceptEdits
+    model: haiku
+    execution_step: 2  # Runs in parallel with Format code
+  - name: continue-or-quit-based-on-claude-usage
+    type: command
+    command: n4_cli check-claude-usage --threshold 10
+    working_directory: .  # Optional: specify working directory
+    timeout: 600  # Optional: timeout in seconds (default: 300)
+    execution_step: 3  # Runs in parallel with Format code
+    abort_on_failure: true
   - name: compute2
     type: prompt  # Optional, defaults to "prompt"
     prompt: |
       calculate 2 + 2
-    depends_on:
-      - compute1
     model: haiku # Override default model
-    execution_step: 1  # Runs in parallel with Format code
-
-  - name: Run tests
-    type: command
-    command: uv run pytest tests/ -v
-    working_directory: .  # Optional: specify working directory
-    timeout: 600  # Optional: timeout in seconds (default: 300)
-    execution_step: 2  # Runs in parallel with Format code
+    execution_step: 4  # Runs in parallel with Format code

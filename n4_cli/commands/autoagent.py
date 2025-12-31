@@ -298,7 +298,7 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet", prompt_flags
         if prompt_flags:
             base_cmd = f'{base_cmd} {prompt_flags}'
         else:
-            base_cmd = f'{base_cmd} --permission-mode acceptEdits'
+            base_cmd = f'{base_cmd}'
 
         cmd = f'{base_cmd} -p "{escaped_prompt}"'
 

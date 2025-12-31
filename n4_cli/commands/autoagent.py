@@ -122,17 +122,12 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             if not prompt and not prompt_file:
                 raise ValueError(f"Task '{name}' of type 'prompt' requires either 'prompt' or 'prompt_file' field")
 
-            # If prompt_file is specified, read the file content
+            # If prompt_file is specified, we'll read it at execution time (not now)
+            # This allows the file to be created/updated during execution (e.g., by prepare_next_prompt)
             if prompt_file:
-                prompt_file_path = Path(prompt_file)
-                if not prompt_file_path.exists():
-                    raise ValueError(f"Task '{name}' prompt_file not found: {prompt_file}")
-                try:
-                    with open(prompt_file_path, 'r') as pf:
-                        prompt = pf.read()
-                    logger.info(f"   📄 Loaded prompt from file: {prompt_file}")
-                except Exception as e:
-                    raise ValueError(f"Task '{name}' failed to read prompt_file '{prompt_file}': {e}")
+                logger.info(f"   📄 Will read prompt from file at execution time: {prompt_file}")
+                # Don't read the file now - it will be read when the task executes
+                prompt = None  # Clear prompt since we'll read from file later
         if task_type == 'command' and not command:
             raise ValueError(f"Task '{name}' of type 'command' missing required 'command' field")
         if task_type == 'goto' and goto_step is None:
@@ -224,22 +219,40 @@ async def execute_task(task: TaskConfig, step_num: int, total_steps: int, verbos
         else:
             # Execute LLM prompt
             logger.info(f"   Model: {task.model}, Agent: {task.agent}")
+
+            # Read prompt from file if prompt_file is specified
+            prompt_to_execute = task.prompt
             if task.prompt_file:
-                logger.info(f"   Prompt file: {task.prompt_file}")
+                logger.info(f"   Reading prompt from file: {task.prompt_file}")
+                try:
+                    prompt_file_path = Path(task.prompt_file)
+                    if not prompt_file_path.exists():
+                        return False, f"Prompt file not found: {task.prompt_file}", 'file_not_found'
+
+                    with open(prompt_file_path, 'r') as pf:
+                        prompt_to_execute = pf.read()
+
+                    if not prompt_to_execute or not prompt_to_execute.strip():
+                        return False, f"Prompt file is empty: {task.prompt_file}", 'empty_prompt_file'
+
+                    logger.info(f"   ✅ Successfully read prompt from file")
+                except Exception as e:
+                    return False, f"Failed to read prompt file '{task.prompt_file}': {e}", 'file_read_error'
+
             if task.prompt_flags:
                 logger.info(f"   Prompt flags: {task.prompt_flags}")
 
             # Always print the full prompt to console
             click.echo(click.style(f"\n📝 Prompt:", fg="blue", bold=True))
             click.echo(click.style("-" * 40, fg="blue"))
-            click.echo(task.prompt)
+            click.echo(prompt_to_execute)
             click.echo(click.style("-" * 40, fg="blue"))
 
             # For now, we only support claude agent
             if task.agent.lower() != 'claude':
                 logger.warning(f"⚠️  Agent '{task.agent}' not yet supported, falling back to 'claude'")
 
-            success, output, error_type = await execute_claude_prompt(task.prompt, task.model, task.prompt_flags)
+            success, output, error_type = await execute_claude_prompt(prompt_to_execute, task.model, task.prompt_flags)
 
         if success:
             logger.info(f"✅ Step {step_num}/{total_steps} completed successfully: {task.name}")
@@ -327,6 +340,10 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet", prompt_flags
         Tuple of (success: bool, output: str, error_type: Optional[str])
     """
     try:
+        # Handle None or empty prompt
+        if prompt is None:
+            return False, "Prompt is None - prompt file may be empty or task configuration is invalid", 'generic'
+
         # Escape double quotes in prompt
         escaped_prompt = prompt.replace('"', '\\"').replace('$', '\\$')
 
@@ -456,6 +473,11 @@ async def execute_prepare_next_prompt(plan_file: str, prompt_file: str) -> Tuple
 
         # Write the next prompt to prompt_file
         next_prompt = prompts[next_incomplete_idx].get('prompt', '')
+        # Ensure next_prompt is a string (not None)
+        if next_prompt is None:
+            return False, f"Prompt {next_incomplete_idx + 1} in plan file has null/None value", 'invalid_prompt'
+        if not isinstance(next_prompt, str):
+            return False, f"Prompt {next_incomplete_idx + 1} in plan file must be a string, got {type(next_prompt)}", 'invalid_prompt'
         with open(prompt_path, 'w') as f:
             f.write(next_prompt)
         logger.info(f"   📝 Wrote next prompt ({next_incomplete_idx + 1}) to: {prompt_file}")

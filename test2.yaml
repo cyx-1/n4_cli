@@ -10,26 +10,30 @@ defaults:
   abort_on_failure: true  # Abort all remaining tasks if one fails
 
 tasks:
-  - name: compute1
-    type: prompt  # Optional, defaults to "prompt"
-    prompt: |
-      calculate 1 + 1
-    model: haiku # Override default model
-    execution_step: 1  # Runs in parallel with Format code
   - name: check-claude-usage
     prompt: |
       open https://claude.ai/settings/usage page, refresh page to get latest content and read what percentage is used for the current session, and when does it reset. save what you read by updating a yaml file called ./tmp/claude_usage.yaml with two keys: plan_usage_limit_session_pct and plan_usage_limit_reset_time.  plan_usage_limit_session_pct holds a numeric value, plan_usage_limit_reset_time holds a ISO timestamp in my machine's timezone. 
     prompt_flags: --chrome --permission-mode acceptEdits
     model: haiku
-    execution_step: 2  # Runs in parallel with Format code
+    execution_step: 1
   - name: continue-or-quit-based-on-claude-usage
     type: command
-    command: n4_cli check-claude-usage --threshold 47
+    command: n4_cli check-claude-usage --threshold 66
     working_directory: .  # Optional: specify working directory
     timeout: 600  # Optional: timeout in seconds (default: 300)
-    execution_step: 3  # Runs in parallel with Format code
+    execution_step: 2  # Runs in parallel with Format code
     abort_on_failure: true
+  - name: prepare_next_prompt
+    type: prepare_next_prompt
+    plan_file: ./tmp/plan.yaml
+    prompt_file: ./tmp/prompt.md
+    execution_step: 3
+  - name: compute1
+    type: prompt  # Optional, defaults to "prompt"
+    prompt_file: ./tmp/prompt.md
+    model: haiku # Override default model
+    execution_step: 4  # Runs in parallel with Format code
   - name: goto
     type: goto
     goto_step: 1 
-    execution_step: 4
+    execution_step: 5 

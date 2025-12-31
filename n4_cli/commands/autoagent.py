@@ -38,6 +38,7 @@ class TaskConfig:
     auto_push: bool = False
     working_directory: Optional[str] = None  # For command tasks
     timeout: int = 300  # Timeout in seconds for command tasks
+    execution_step: int = 1  # Tasks with same step run in parallel, lower steps run first
 
 
 @dataclass
@@ -127,6 +128,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             auto_push=task_data.get('auto_push', default_auto_push),
             working_directory=task_data.get('working_directory'),
             timeout=task_data.get('timeout', 300),
+            execution_step=task_data.get('execution_step', 1),
         )
         tasks.append(task)
 
@@ -344,52 +346,48 @@ def build_dependency_graph(tasks: List[TaskConfig]) -> Dict[str, Set[str]]:
 
 
 def get_execution_order(tasks: List[TaskConfig], dependency_graph: Dict[str, Set[str]]) -> List[List[TaskConfig]]:
-    """Get execution order for tasks based on dependencies.
+    """Get execution order for tasks based on execution_step.
 
-    Returns a list of task batches. Tasks in the same batch can be executed in parallel.
+    Returns a list of task batches. Tasks with the same execution_step run in parallel.
+    Steps are executed in ascending order (step 1 first, then step 2, etc.).
 
     Args:
         tasks: List of TaskConfig objects
-        dependency_graph: Dependency graph from build_dependency_graph
+        dependency_graph: Dependency graph from build_dependency_graph (used for validation)
 
     Returns:
         List of task batches (each batch is a list of tasks that can run in parallel)
     """
-    logger.info("📊 Calculating execution order...")
+    logger.info("📊 Calculating execution order by step...")
 
-    task_map = {task.name: task for task in tasks}
-    completed = set()
-    batches = []
+    # Group tasks by execution_step
+    step_groups: Dict[int, List[TaskConfig]] = {}
+    for task in tasks:
+        step = task.execution_step
+        if step not in step_groups:
+            step_groups[step] = []
+        step_groups[step].append(task)
 
-    while len(completed) < len(tasks):
-        # Find tasks that can be executed (all dependencies completed)
-        ready = []
-        for task in tasks:
-            if task.name not in completed:
-                deps = dependency_graph.get(task.name, set())
-                if deps.issubset(completed):
-                    ready.append(task)
+    # Sort by step number and create batches
+    sorted_steps = sorted(step_groups.keys())
+    batches = [step_groups[step] for step in sorted_steps]
 
-        if not ready:
-            raise ValueError("Deadlock detected - no tasks can proceed")
-
-        batches.append(ready)
-        completed.update(task.name for task in ready)
-
-    logger.info(f"✅ Execution order calculated: {len(batches)} batch(es)")
-    for i, batch in enumerate(batches, 1):
-        logger.info(f"   Batch {i}: {[task.name for task in batch]}")
+    logger.info(f"✅ Execution order calculated: {len(batches)} step(s)")
+    for step in sorted_steps:
+        logger.info(f"   Step {step}: {[task.name for task in step_groups[step]]}")
 
     return batches
 
 
-async def run_autoagent(file_path: Path, verbose: bool, force_sequential: bool = False):
+async def run_autoagent(file_path: Path, verbose: bool):
     """Run all tasks from autoagent configuration file.
+
+    Tasks are grouped by execution_step and run in parallel within each step.
+    Steps are executed in order (step 1 first, then step 2, etc.).
 
     Args:
         file_path: Path to YAML configuration file
         verbose: Whether to show verbose output
-        force_sequential: Force sequential execution even if tasks can run in parallel
     """
     click.echo(click.style(f"\n🤖 AutoAgent Starting...", fg="cyan", bold=True))
     click.echo(click.style(f"📄 Reading configuration from: {file_path}", fg="blue"))
@@ -414,7 +412,6 @@ async def run_autoagent(file_path: Path, verbose: bool, force_sequential: bool =
     click.echo(f"   Version: {config.version}")
     click.echo(f"   Default Model: {config.defaults.get('model', 'sonnet')}")
     click.echo(f"   Default Agent: {config.defaults.get('agent', 'claude')}")
-    click.echo(f"   Execution Mode: {config.defaults.get('execution_mode', 'sequential')}")
     click.echo(f"   Branch Strategy: {config.defaults.get('branch_strategy', 'separate')}")
     click.echo(f"   Auto Push: {config.defaults.get('auto_push', False)}")
     click.echo(f"   Abort on Failure: {config.defaults.get('abort_on_failure', True)}")
@@ -430,22 +427,12 @@ async def run_autoagent(file_path: Path, verbose: bool, force_sequential: bool =
         click.echo(click.style(f"❌ Dependency error: {e}", fg="red"))
         return
 
-    # Determine execution mode
-    execution_mode = config.defaults.get('execution_mode', 'sequential')
-    if force_sequential:
-        execution_mode = 'sequential'
-        logger.info("Forced sequential execution mode")
-
     abort_on_failure = config.defaults.get('abort_on_failure', True)
 
     try:
-        if execution_mode == 'parallel':
-            # Get batches for parallel execution
-            batches = get_execution_order(tasks, dependency_graph)
-            await run_parallel_execution(batches, verbose, abort_on_failure)
-        else:
-            # Sequential execution
-            await run_sequential_execution(tasks, verbose, abort_on_failure)
+        # Get batches grouped by execution_step
+        batches = get_execution_order(tasks, dependency_graph)
+        await run_step_execution(batches, verbose, abort_on_failure)
 
         click.echo(click.style(f"\n{'='*80}", fg="green"))
         click.echo(click.style(f"✨ AutoAgent completed all task(s)!", fg="green", bold=True))
@@ -459,73 +446,37 @@ async def run_autoagent(file_path: Path, verbose: bool, force_sequential: bool =
         sys.exit(1)
 
 
-async def run_sequential_execution(tasks: List[TaskConfig], verbose: bool, abort_on_failure: bool):
-    """Run tasks sequentially.
+async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abort_on_failure: bool):
+    """Run tasks grouped by execution_step.
+
+    Tasks with the same execution_step run in parallel. Steps are executed in order.
 
     Args:
-        tasks: List of tasks to execute
-        verbose: Whether to show verbose output
-        abort_on_failure: Whether to abort on task failure
-    """
-    logger.info(f"▶️  Starting sequential execution of {len(tasks)} task(s)")
-
-    for i, task in enumerate(tasks, 1):
-        click.echo(click.style(f"\n{'='*80}", fg="cyan"))
-        click.echo(click.style(f"Task {i}/{len(tasks)}: {task.name}", fg="cyan", bold=True))
-        click.echo(click.style(f"{'='*80}", fg="cyan"))
-
-        success, output, error_type = await execute_task(task, i, len(tasks), verbose)
-
-        if success:
-            click.echo(click.style(f"\n✅ Task completed successfully!", fg="green", bold=True))
-            if verbose or len(output) < 500:
-                click.echo(click.style(f"\n📤 Output:", fg="blue"))
-                click.echo(output)
-        else:
-            click.echo(click.style(f"\n❌ Task failed!", fg="red", bold=True))
-            click.echo(click.style(f"Error: {output}", fg="red"))
-
-            # Check if we should abort
-            if error_type == 'rate_limit':
-                logger.error("Rate limit exceeded - aborting all tasks")
-                raise TaskAbortException("Rate limit exceeded")
-
-            if abort_on_failure:
-                logger.error("Task failed and abort_on_failure is True - aborting")
-                raise TaskAbortException(f"Task '{task.name}' failed")
-
-            # Ask user if they want to continue
-            if i < len(tasks):
-                if not click.confirm(click.style("\n⚠️  Continue with next task?", fg="yellow"), default=True):
-                    logger.info("User chose to stop execution")
-                    raise TaskAbortException("Stopped by user")
-
-
-async def run_parallel_execution(batches: List[List[TaskConfig]], verbose: bool, abort_on_failure: bool):
-    """Run tasks in parallel batches.
-
-    Args:
-        batches: List of task batches (tasks in same batch run in parallel)
+        batches: List of task batches (tasks in same step run in parallel)
         verbose: Whether to show verbose output
         abort_on_failure: Whether to abort on task failure
     """
     total_tasks = sum(len(batch) for batch in batches)
-    logger.info(f"⚡ Starting parallel execution of {total_tasks} task(s) in {len(batches)} batch(es)")
+    logger.info(f"⚡ Starting step-based execution of {total_tasks} task(s) in {len(batches)} step(s)")
 
     completed_count = 0
 
-    for batch_num, batch in enumerate(batches, 1):
+    for step_num, batch in enumerate(batches, 1):
         click.echo(click.style(f"\n{'='*80}", fg="cyan"))
-        click.echo(click.style(f"Batch {batch_num}/{len(batches)}: {len(batch)} task(s) in parallel", fg="cyan", bold=True))
-        click.echo(click.style(f"Tasks: {[task.name for task in batch]}", fg="cyan"))
+        if len(batch) == 1:
+            click.echo(click.style(f"Step {step_num}/{len(batches)}: {batch[0].name}", fg="cyan", bold=True))
+        else:
+            click.echo(click.style(f"Step {step_num}/{len(batches)}: {len(batch)} task(s) in parallel", fg="cyan", bold=True))
+            click.echo(click.style(f"Tasks: {[task.name for task in batch]}", fg="cyan"))
         click.echo(click.style(f"{'='*80}", fg="cyan"))
 
-        # Execute all tasks in this batch concurrently
+        # Execute all tasks in this step concurrently
         results = await asyncio.gather(*[execute_task(task, completed_count + i + 1, total_tasks, verbose) for i, task in enumerate(batch)], return_exceptions=True)
 
         # Process results
         for i, (task, result) in enumerate(zip(batch, results)):
-            click.echo(click.style(f"\n--- Task: {task.name} ---", fg="blue"))
+            if len(batch) > 1:
+                click.echo(click.style(f"\n--- Task: {task.name} ---", fg="blue"))
 
             if isinstance(result, Exception):
                 click.echo(click.style(f"❌ Task failed with exception!", fg="red", bold=True))
@@ -538,12 +489,12 @@ async def run_parallel_execution(batches: List[List[TaskConfig]], verbose: bool,
                 success, output, error_type = result
 
                 if success:
-                    click.echo(click.style(f"✅ Task completed successfully!", fg="green", bold=True))
+                    click.echo(click.style(f"\n✅ Task completed successfully!", fg="green", bold=True))
                     if verbose or len(output) < 500:
                         click.echo(click.style(f"\n📤 Output:", fg="blue"))
                         click.echo(output)
                 else:
-                    click.echo(click.style(f"❌ Task failed!", fg="red", bold=True))
+                    click.echo(click.style(f"\n❌ Task failed!", fg="red", bold=True))
                     click.echo(click.style(f"Error: {output}", fg="red"))
 
                     # Check for critical errors
@@ -567,15 +518,17 @@ async def run_parallel_execution(batches: List[List[TaskConfig]], verbose: bool,
     help="Path to autoagent YAML configuration file (default: autoagent.yaml)",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output and prompts")
-@click.option("--sequential", "-s", is_flag=True, help="Force sequential execution (ignore parallel mode in config)")
-def autoagent(file, verbose, sequential):
+def autoagent(file, verbose):
     """Execute tasks from autoagent.yaml configuration file.
 
     The autoagent.yaml file defines tasks with their prompts, models, dependencies,
     and execution strategy. See autoagent.yaml.example for the format.
 
+    Tasks are grouped by execution_step and run in parallel within each step.
+    Steps are executed in order (step 1 first, then step 2, etc.).
+
     Features:
-    - Sequential or parallel execution
+    - Step-based parallel execution (tasks with same execution_step run in parallel)
     - Task dependencies
     - Multiple AI models (sonnet, opus, haiku)
     - Branch management
@@ -592,4 +545,4 @@ def autoagent(file, verbose, sequential):
         logger.setLevel(logging.DEBUG)
 
     # Run the async function
-    asyncio.run(run_autoagent(file, verbose, sequential))
+    asyncio.run(run_autoagent(file, verbose))

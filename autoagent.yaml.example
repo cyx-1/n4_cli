@@ -7,7 +7,6 @@ version: "1.0"
 defaults:
   model: sonnet  # Options: sonnet, opus, haiku (for prompt tasks)
   agent: claude  # Options: claude, codex (agent type to use for prompt tasks)
-  execution_mode: sequential  # Options: sequential, parallel
   branch_strategy: separate  # Options: separate (create new branches), main (work on main)
   auto_push: false  # Whether to push to remote after successful task completion
   abort_on_failure: true  # Abort all remaining tasks if one fails
@@ -16,84 +15,59 @@ defaults:
 # Two types of tasks are supported:
 # 1. "prompt" tasks - Send prompts to AI (default type)
 # 2. "command" tasks - Execute shell commands
+#
+# Execution order is controlled by the execution_step field:
+# - Tasks with the same execution_step run in parallel
+# - Lower steps run before higher steps (step 1 completes before step 2 starts)
+# - Default execution_step is 1 if not specified
 
 tasks:
-  # Example 1: AI Prompt task (default type)
-  - name: Check Python version
-    type: prompt  # Optional, defaults to "prompt"
-    prompt: |
-      What version of Python is recommended for this project?
-      Check the pyproject.toml file and provide a brief summary.
-    model: opus  # Override default model
-    # branch: feature/python-check
-
-  # Example 2: Shell Command task
-  - name: Run tests
-    type: command
-    command: pytest tests/ -v
-    working_directory: .  # Optional: specify working directory
-    timeout: 600  # Optional: timeout in seconds (default: 300)
-    # branch: feature/run-tests
-
-  # Example 3: Build command that depends on tests
-  - name: Build project
-    type: command
-    command: python -m build
-    depends_on:
-      - Run tests  # Wait for tests to pass first
-    timeout: 300
-
-  # Example 4: AI analysis after build
-  - name: Analyze build output
-    type: prompt
-    prompt: |
-      Review the build output and check if there are any warnings
-      or issues that should be addressed.
-    depends_on:
-      - Build project
-    model: sonnet
-
-  # Example 5: Mixed workflow - lint, format, then review
-  - name: Run linter
+  # Example 1: Two tasks running in parallel (both step 1)
+  - name: Lint code
     type: command
     command: ruff check .
-    branch: feature/code-quality
+    execution_step: 1  # Runs in parallel with Format code
 
   - name: Format code
     type: command
-    command: black .
-    share_branch_with: Run linter  # Use same branch
-    depends_on:
-      - Run linter
+    command: black --check .
+    execution_step: 1  # Runs in parallel with Lint code
 
+  # Example 2: Task that waits for step 1 to complete
+  - name: Run tests
+    type: command
+    command: pytest tests/ -v
+    execution_step: 2  # Runs after step 1 completes
+    timeout: 600
+
+  # Example 3: Multiple tasks in step 2 (running in parallel after step 1)
+  - name: Check types
+    type: command
+    command: mypy .
+    execution_step: 2  # Runs in parallel with Run tests
+
+  # Example 4: AI analysis after all checks pass
   - name: AI code review
     type: prompt
     prompt: |
       Review the recent code changes and suggest any improvements
       for code quality, performance, or maintainability.
-    depends_on:
-      - Format code
-    share_branch_with: Run linter  # All three tasks share same branch
-    auto_push: true  # Push the branch after completion
+    execution_step: 3  # Runs after steps 1 and 2 complete
+    model: opus
 
-  # Example 6: Complex dependency chain
-  - name: Install dependencies
+  # Example 5: Build after review
+  - name: Build project
     type: command
-    command: uv sync --all-extras
-    timeout: 600
+    command: python -m build
+    execution_step: 4
+    timeout: 300
 
-  - name: Check code coverage
-    type: command
-    command: pytest --cov=n4_cli --cov-report=term-missing
-    depends_on:
-      - Install dependencies
-    timeout: 600
-
-  - name: Generate coverage report
+  # Example 6: Final summary
+  - name: Generate summary
     type: prompt
     prompt: |
-      Based on the test coverage results, identify areas that need
-      more test coverage and suggest what tests to add.
-    depends_on:
-      - Check code coverage
-    model: opus
+      Summarize all the checks, tests, and build results.
+      Highlight any issues that need attention.
+    execution_step: 5
+    model: sonnet
+    auto_push: true  # Push after completion

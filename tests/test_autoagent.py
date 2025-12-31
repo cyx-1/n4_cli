@@ -18,8 +18,7 @@ from n4_cli.commands.autoagent import (
     get_execution_order,
     is_claude_available,
     parse_yaml_config,
-    run_parallel_execution,
-    run_sequential_execution,
+    run_step_execution,
 )
 
 
@@ -32,7 +31,6 @@ version: "1.0"
 defaults:
   model: sonnet
   agent: claude
-  execution_mode: sequential
   branch_strategy: separate
   auto_push: false
   abort_on_failure: true
@@ -41,47 +39,46 @@ tasks:
   - name: Task 1
     prompt: "Do task 1"
     model: opus
+    execution_step: 1
 
   - name: Task 2
     prompt: "Do task 2"
-    depends_on:
-      - Task 1
+    execution_step: 2
 
   - name: Task 3
     prompt: "Do task 3"
     branch: feature/task-3
     auto_push: true
+    execution_step: 3
 """
 
 
 @pytest.fixture
-def sample_parallel_yaml_config():
-    """Sample YAML configuration for parallel execution."""
+def sample_step_yaml_config():
+    """Sample YAML configuration for step-based execution."""
     return """
 version: "1.0"
 
 defaults:
   model: sonnet
-  execution_mode: parallel
   abort_on_failure: true
 
 tasks:
   - name: Task A
-    prompt: "Independent task A"
+    prompt: "Step 1 task A"
+    execution_step: 1
 
   - name: Task B
-    prompt: "Independent task B"
+    prompt: "Step 1 task B"
+    execution_step: 1
 
   - name: Task C
-    prompt: "Depends on A and B"
-    depends_on:
-      - Task A
-      - Task B
+    prompt: "Step 2 task"
+    execution_step: 2
 
   - name: Task D
-    prompt: "Depends on C"
-    depends_on:
-      - Task C
+    prompt: "Step 3 task"
+    execution_step: 3
 """
 
 
@@ -114,26 +111,25 @@ def sample_command_task_config():
 version: "1.0"
 
 defaults:
-  execution_mode: sequential
+  abort_on_failure: true
 
 tasks:
   - name: Run tests
     type: command
     command: pytest tests/ -v
     timeout: 60
+    execution_step: 1
 
   - name: Build project
     type: command
     command: python -m build
-    depends_on:
-      - Run tests
     working_directory: /tmp
+    execution_step: 2
 
   - name: Analyze results
     type: prompt
     prompt: "Analyze the build output"
-    depends_on:
-      - Build project
+    execution_step: 3
 """
 
 
@@ -145,23 +141,23 @@ version: "1.0"
 
 defaults:
   model: sonnet
-  execution_mode: parallel
+  abort_on_failure: true
 
 tasks:
   - name: Lint code
     type: command
     command: echo "Linting..."
+    execution_step: 1
 
   - name: Format code
     type: command
     command: echo "Formatting..."
+    execution_step: 1
 
   - name: Review changes
     type: prompt
     prompt: "Review the code changes"
-    depends_on:
-      - Lint code
-      - Format code
+    execution_step: 2
 """
 
 
@@ -193,9 +189,11 @@ class TestParseYamlConfig:
         assert len(config.tasks) == 3
         assert config.tasks[0].name == "Task 1"
         assert config.tasks[0].model == "opus"
-        assert config.tasks[1].depends_on == ["Task 1"]
+        assert config.tasks[0].execution_step == 1
+        assert config.tasks[1].execution_step == 2
         assert config.tasks[2].branch == "feature/task-3"
         assert config.tasks[2].auto_push is True
+        assert config.tasks[2].execution_step == 3
 
     def test_parse_file_not_found(self, tmp_path):
         """Test parsing when file doesn't exist."""
@@ -710,12 +708,12 @@ class TestBuildDependencyGraph:
 class TestGetExecutionOrder:
     """Tests for get_execution_order function."""
 
-    def test_simple_sequential_order(self):
-        """Test simple sequential execution order."""
+    def test_simple_step_order(self):
+        """Test simple step-based execution order."""
         tasks = [
-            TaskConfig(name="Task 1", prompt="Do 1"),
-            TaskConfig(name="Task 2", prompt="Do 2", depends_on=["Task 1"]),
-            TaskConfig(name="Task 3", prompt="Do 3", depends_on=["Task 2"]),
+            TaskConfig(name="Task 1", prompt="Do 1", execution_step=1),
+            TaskConfig(name="Task 2", prompt="Do 2", execution_step=2),
+            TaskConfig(name="Task 3", prompt="Do 3", execution_step=3),
         ]
         graph = build_dependency_graph(tasks)
 
@@ -726,12 +724,12 @@ class TestGetExecutionOrder:
         assert batches[1][0].name == "Task 2"
         assert batches[2][0].name == "Task 3"
 
-    def test_parallel_execution_order(self):
-        """Test parallel execution order."""
+    def test_parallel_step_execution(self):
+        """Test tasks with same step run in parallel."""
         tasks = [
-            TaskConfig(name="A", prompt="Do A"),
-            TaskConfig(name="B", prompt="Do B"),
-            TaskConfig(name="C", prompt="Do C", depends_on=["A", "B"]),
+            TaskConfig(name="A", prompt="Do A", execution_step=1),
+            TaskConfig(name="B", prompt="Do B", execution_step=1),
+            TaskConfig(name="C", prompt="Do C", execution_step=2),
         ]
         graph = build_dependency_graph(tasks)
 
@@ -745,143 +743,145 @@ class TestGetExecutionOrder:
         assert len(batches[1]) == 1
         assert batches[1][0].name == "C"
 
-    def test_complex_execution_order(self):
-        """Test complex execution order with multiple levels."""
+    def test_complex_step_order(self):
+        """Test complex execution order with multiple steps."""
         tasks = [
-            TaskConfig(name="A", prompt="Do A"),
-            TaskConfig(name="B", prompt="Do B"),
-            TaskConfig(name="C", prompt="Do C", depends_on=["A"]),
-            TaskConfig(name="D", prompt="Do D", depends_on=["A"]),
-            TaskConfig(name="E", prompt="Do E", depends_on=["B", "C"]),
+            TaskConfig(name="A", prompt="Do A", execution_step=1),
+            TaskConfig(name="B", prompt="Do B", execution_step=1),
+            TaskConfig(name="C", prompt="Do C", execution_step=2),
+            TaskConfig(name="D", prompt="Do D", execution_step=2),
+            TaskConfig(name="E", prompt="Do E", execution_step=3),
         ]
         graph = build_dependency_graph(tasks)
 
         batches = get_execution_order(tasks, graph)
 
-        # Batch 1: A, B
-        # Batch 2: C, D
-        # Batch 3: E
+        # Step 1: A, B
+        # Step 2: C, D
+        # Step 3: E
         assert len(batches) == 3
         assert {t.name for t in batches[0]} == {"A", "B"}
         assert {t.name for t in batches[1]} == {"C", "D"}
         assert {t.name for t in batches[2]} == {"E"}
 
+    def test_non_sequential_step_numbers(self):
+        """Test that steps with gaps are handled correctly."""
+        tasks = [
+            TaskConfig(name="A", prompt="Do A", execution_step=1),
+            TaskConfig(name="B", prompt="Do B", execution_step=5),
+            TaskConfig(name="C", prompt="Do C", execution_step=10),
+        ]
+        graph = build_dependency_graph(tasks)
 
-class TestRunSequentialExecution:
-    """Tests for run_sequential_execution function."""
+        batches = get_execution_order(tasks, graph)
+
+        # Should still produce 3 batches in order
+        assert len(batches) == 3
+        assert batches[0][0].name == "A"
+        assert batches[1][0].name == "B"
+        assert batches[2][0].name == "C"
+
+    def test_default_step_is_1(self):
+        """Test that tasks without execution_step default to step 1."""
+        tasks = [
+            TaskConfig(name="A", prompt="Do A"),  # defaults to step 1
+            TaskConfig(name="B", prompt="Do B"),  # defaults to step 1
+        ]
+        graph = build_dependency_graph(tasks)
+
+        batches = get_execution_order(tasks, graph)
+
+        # Both tasks should be in the same batch (step 1)
+        assert len(batches) == 1
+        assert len(batches[0]) == 2
+        assert {t.name for t in batches[0]} == {"A", "B"}
+
+
+class TestRunStepExecution:
+    """Tests for run_step_execution function."""
 
     @pytest.mark.asyncio
-    async def test_sequential_success(self):
-        """Test successful sequential execution."""
-        tasks = [
-            TaskConfig(name="Task 1", prompt="Do 1"),
-            TaskConfig(name="Task 2", prompt="Do 2"),
+    async def test_step_execution_success(self):
+        """Test successful step-based execution."""
+        tasks_step1 = [
+            TaskConfig(name="Task A", prompt="Do A", execution_step=1),
+            TaskConfig(name="Task B", prompt="Do B", execution_step=1),
         ]
+        tasks_step2 = [
+            TaskConfig(name="Task C", prompt="Do C", execution_step=2),
+        ]
+        batches = [tasks_step1, tasks_step2]
 
         with patch('n4_cli.commands.autoagent.execute_task',
                    return_value=(True, "Success", None)) as mock_execute:
-            await run_sequential_execution(tasks, verbose=False, abort_on_failure=True)
-
-            assert mock_execute.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_sequential_failure_abort(self):
-        """Test sequential execution with failure and abort."""
-        tasks = [
-            TaskConfig(name="Task 1", prompt="Do 1"),
-            TaskConfig(name="Task 2", prompt="Do 2"),
-        ]
-
-        with patch('n4_cli.commands.autoagent.execute_task',
-                   return_value=(False, "Error", "generic")) as mock_execute:
-            with pytest.raises(TaskAbortException, match="Task 'Task 1' failed"):
-                await run_sequential_execution(tasks, verbose=False, abort_on_failure=True)
-
-            # Should only execute first task
-            assert mock_execute.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_sequential_rate_limit_abort(self):
-        """Test sequential execution aborting on rate limit."""
-        tasks = [
-            TaskConfig(name="Task 1", prompt="Do 1"),
-            TaskConfig(name="Task 2", prompt="Do 2"),
-        ]
-
-        with patch('n4_cli.commands.autoagent.execute_task',
-                   return_value=(False, "Rate limit", "rate_limit")):
-            with pytest.raises(TaskAbortException, match="Rate limit exceeded"):
-                await run_sequential_execution(tasks, verbose=False, abort_on_failure=False)
-
-
-class TestRunParallelExecution:
-    """Tests for run_parallel_execution function."""
-
-    @pytest.mark.asyncio
-    async def test_parallel_success(self):
-        """Test successful parallel execution."""
-        tasks_batch1 = [
-            TaskConfig(name="Task A", prompt="Do A"),
-            TaskConfig(name="Task B", prompt="Do B"),
-        ]
-        tasks_batch2 = [
-            TaskConfig(name="Task C", prompt="Do C"),
-        ]
-        batches = [tasks_batch1, tasks_batch2]
-
-        with patch('n4_cli.commands.autoagent.execute_task',
-                   return_value=(True, "Success", None)) as mock_execute:
-            await run_parallel_execution(batches, verbose=False, abort_on_failure=True)
+            await run_step_execution(batches, verbose=False, abort_on_failure=True)
 
             assert mock_execute.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_parallel_failure_abort(self):
-        """Test parallel execution with failure and abort."""
-        tasks_batch1 = [
-            TaskConfig(name="Task A", prompt="Do A"),
-            TaskConfig(name="Task B", prompt="Do B"),
+    async def test_step_execution_failure_abort(self):
+        """Test step execution with failure and abort."""
+        tasks_step1 = [
+            TaskConfig(name="Task A", prompt="Do A", execution_step=1),
+            TaskConfig(name="Task B", prompt="Do B", execution_step=1),
         ]
-        batches = [tasks_batch1]
+        batches = [tasks_step1]
 
         with patch('n4_cli.commands.autoagent.execute_task',
                    return_value=(False, "Error", "generic")):
             with pytest.raises(TaskAbortException, match="failed"):
-                await run_parallel_execution(batches, verbose=False, abort_on_failure=True)
+                await run_step_execution(batches, verbose=False, abort_on_failure=True)
 
     @pytest.mark.asyncio
-    async def test_parallel_rate_limit_abort(self):
-        """Test parallel execution aborting on rate limit."""
-        tasks_batch1 = [
-            TaskConfig(name="Task A", prompt="Do A"),
+    async def test_step_execution_rate_limit_abort(self):
+        """Test step execution aborting on rate limit."""
+        tasks_step1 = [
+            TaskConfig(name="Task A", prompt="Do A", execution_step=1),
         ]
-        batches = [tasks_batch1]
+        batches = [tasks_step1]
 
         with patch('n4_cli.commands.autoagent.execute_task',
                    return_value=(False, "Rate limit", "rate_limit")):
             with pytest.raises(TaskAbortException, match="Rate limit exceeded"):
-                await run_parallel_execution(batches, verbose=False, abort_on_failure=True)
+                await run_step_execution(batches, verbose=False, abort_on_failure=True)
 
     @pytest.mark.asyncio
-    async def test_parallel_exception_abort(self):
-        """Test parallel execution with exception."""
-        tasks_batch1 = [
-            TaskConfig(name="Task A", prompt="Do A"),
+    async def test_step_execution_exception_abort(self):
+        """Test step execution with exception."""
+        tasks_step1 = [
+            TaskConfig(name="Task A", prompt="Do A", execution_step=1),
         ]
-        batches = [tasks_batch1]
+        batches = [tasks_step1]
 
         with patch('n4_cli.commands.autoagent.execute_task',
                    side_effect=Exception("Test exception")):
             with pytest.raises(TaskAbortException):
-                await run_parallel_execution(batches, verbose=False, abort_on_failure=True)
+                await run_step_execution(batches, verbose=False, abort_on_failure=True)
+
+    @pytest.mark.asyncio
+    async def test_single_task_per_step(self):
+        """Test execution with single task per step."""
+        tasks_step1 = [
+            TaskConfig(name="Task A", prompt="Do A", execution_step=1),
+        ]
+        tasks_step2 = [
+            TaskConfig(name="Task B", prompt="Do B", execution_step=2),
+        ]
+        batches = [tasks_step1, tasks_step2]
+
+        with patch('n4_cli.commands.autoagent.execute_task',
+                   return_value=(True, "Success", None)) as mock_execute:
+            await run_step_execution(batches, verbose=False, abort_on_failure=True)
+
+            assert mock_execute.call_count == 2
 
 
 class TestIntegration:
     """Integration tests for the full autoagent flow."""
 
     @pytest.mark.asyncio
-    async def test_full_sequential_flow(self, tmp_path, sample_yaml_config):
-        """Test complete sequential execution flow."""
+    async def test_full_step_flow(self, tmp_path, sample_yaml_config):
+        """Test complete step-based execution flow."""
         config_file = tmp_path / "autoagent.yaml"
         config_file.write_text(sample_yaml_config)
 
@@ -890,20 +890,20 @@ class TestIntegration:
             from n4_cli.commands.autoagent import run_autoagent
 
             # Should complete without error
-            await run_autoagent(config_file, verbose=False, force_sequential=False)
+            await run_autoagent(config_file, verbose=False)
 
     @pytest.mark.asyncio
-    async def test_full_parallel_flow(self, tmp_path, sample_parallel_yaml_config):
-        """Test complete parallel execution flow."""
+    async def test_full_parallel_step_flow(self, tmp_path, sample_step_yaml_config):
+        """Test complete parallel step execution flow."""
         config_file = tmp_path / "autoagent.yaml"
-        config_file.write_text(sample_parallel_yaml_config)
+        config_file.write_text(sample_step_yaml_config)
 
         with patch('n4_cli.commands.autoagent.execute_claude_prompt',
                    return_value=(True, "Success", None)):
             from n4_cli.commands.autoagent import run_autoagent
 
             # Should complete without error
-            await run_autoagent(config_file, verbose=False, force_sequential=False)
+            await run_autoagent(config_file, verbose=False)
 
     @pytest.mark.asyncio
     async def test_circular_dependency_detection(self, tmp_path, sample_circular_dependency_config):
@@ -915,4 +915,4 @@ class TestIntegration:
 
         # Should detect circular dependency
         # The function handles this internally and displays error, doesn't raise
-        await run_autoagent(config_file, verbose=False, force_sequential=False)
+        await run_autoagent(config_file, verbose=False)

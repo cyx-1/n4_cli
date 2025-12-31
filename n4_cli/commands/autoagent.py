@@ -40,6 +40,7 @@ class TaskConfig:
     timeout: int = 300  # Timeout in seconds for command tasks
     execution_step: int = 1  # Tasks with same step run in parallel, lower steps run first
     goto_step: Optional[int] = None  # For goto tasks: step number to jump to
+    prompt_flags: Optional[str] = None  # For prompt tasks: additional CLI flags for claude command
 
 
 @dataclass
@@ -123,6 +124,11 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
         if task_type not in ['prompt', 'command', 'goto']:
             raise ValueError(f"Task '{name}' has invalid type '{task_type}'. Must be 'prompt', 'command', or 'goto'")
 
+        # Get prompt_flags for prompt tasks
+        prompt_flags = task_data.get('prompt_flags')
+        if prompt_flags is not None and not isinstance(prompt_flags, str):
+            raise ValueError(f"Task '{name}' has invalid 'prompt_flags' value. Must be a string")
+
         task = TaskConfig(
             name=name,
             task_type=task_type,
@@ -138,6 +144,7 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
             timeout=task_data.get('timeout', 300),
             execution_step=task_data.get('execution_step', 1),
             goto_step=goto_step,
+            prompt_flags=prompt_flags.strip() if prompt_flags else None,
         )
         tasks.append(task)
 
@@ -183,6 +190,8 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
         else:
             # Execute LLM prompt
             logger.info(f"   Model: {task.model}, Agent: {task.agent}")
+            if task.prompt_flags:
+                logger.info(f"   Prompt flags: {task.prompt_flags}")
             if verbose:
                 logger.info(f"   Prompt: {task.prompt[:100]}...")
 
@@ -190,7 +199,7 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
             if task.agent.lower() != 'claude':
                 logger.warning(f"⚠️  Agent '{task.agent}' not yet supported, falling back to 'claude'")
 
-            success, output, error_type = await execute_claude_prompt(task.prompt, task.model)
+            success, output, error_type = await execute_claude_prompt(task.prompt, task.model, task.prompt_flags)
 
         if success:
             logger.info(f"✅ Task {task_num}/{total_tasks} completed successfully: {task.name}")
@@ -266,12 +275,13 @@ async def execute_shell_command(command: str, working_directory: Optional[str] =
         return False, f"Command execution failed: {str(e)}", 'generic'
 
 
-async def execute_claude_prompt(prompt: str, model: str = "sonnet") -> Tuple[bool, str, Optional[str]]:
+async def execute_claude_prompt(prompt: str, model: str = "sonnet", prompt_flags: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
     """Execute a Claude prompt and return the result.
 
     Args:
         prompt: The prompt to send to Claude
         model: The model to use (sonnet, opus, haiku)
+        prompt_flags: Optional additional CLI flags for the claude command
 
     Returns:
         Tuple of (success: bool, output: str, error_type: Optional[str])
@@ -280,9 +290,19 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet") -> Tuple[boo
         # Escape double quotes in prompt
         escaped_prompt = prompt.replace('"', '\\"').replace('$', '\\$')
 
-        cmd = f'claude --permission-mode acceptEdits --model {model} -p "{escaped_prompt}"'
+        # Build command with optional flags
+        # Default flags that are always included
+        base_cmd = f'claude --model {model}'
 
-        logger.debug(f"Executing command: claude --permission-mode acceptEdits --model {model} -p [prompt]")
+        # Add custom prompt_flags if provided, otherwise use default permission mode
+        if prompt_flags:
+            base_cmd = f'{base_cmd} {prompt_flags}'
+        else:
+            base_cmd = f'{base_cmd} --permission-mode acceptEdits'
+
+        cmd = f'{base_cmd} -p "{escaped_prompt}"'
+
+        logger.debug(f"Executing command: {base_cmd} -p [prompt]")
 
         proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await proc.communicate()

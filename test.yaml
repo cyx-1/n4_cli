@@ -9,7 +9,7 @@ defaults:
   abort_on_failure: true  # Abort all remaining tasks if one fails
 
 tasks:
-  # Step 1: Make code changes
+  # Step 1: Make code changes with custom prompt flags
   - name: Make code changes
     type: prompt
     prompt: |
@@ -17,6 +17,7 @@ tasks:
       we specify execution_step with a number value instead. all tasks with execution_step of 1 will execute in parallel
       all tasks with execution_step of 2 will also execute in parallel but only after step 1 is complete
     model: opus
+    prompt_flags: "--permission-mode acceptEdits"  # Custom flags for claude CLI
     execution_step: 1
 
   # Step 2: Run tests
@@ -36,6 +37,38 @@ tasks:
     type: goto
     goto_step: 1  # Required: the execution_step number to jump to
     execution_step: 3
+
+# =============================================================================
+# PROMPT_FLAGS DOCUMENTATION
+# =============================================================================
+# The 'prompt_flags' field allows you to specify additional CLI flags for the
+# claude command when running prompt tasks.
+#
+# Usage:
+#   prompt_flags: "--flag1 --flag2 value"
+#
+# Common flags you might use:
+#   --permission-mode acceptEdits    Accept all edit permissions
+#   --permission-mode bypassPermissions    Bypass all permission checks
+#   --chrome                         Enable Chrome/browser integration
+#   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
+#
+# Examples:
+#
+# 1. Basic permission mode:
+#    - name: Make changes
+#      type: prompt
+#      prompt: "Update the README"
+#      prompt_flags: "--permission-mode acceptEdits"
+#
+# 2. Multiple flags:
+#    - name: Complex task
+#      type: prompt
+#      prompt: "Implement feature X"
+#      prompt_flags: "--chrome --permission-mode acceptEdits"
+#
+# NOTE: If prompt_flags is not specified, the default "--permission-mode acceptEdits"
+# is used automatically.
 
 # =============================================================================
 # GOTO TASK TYPE DOCUMENTATION

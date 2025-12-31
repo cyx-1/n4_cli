@@ -1221,3 +1221,137 @@ class TestGotoTaskType:
         assert success is True
         assert output == "10"
         assert error_type == "goto"
+
+
+class TestPromptFlags:
+    """Tests for prompt_flags functionality."""
+
+    def test_parse_prompt_flags(self, tmp_path):
+        """Test parsing a task with prompt_flags."""
+        config_file = tmp_path / "prompt_flags.yaml"
+        config_file.write_text("""
+version: "1.0"
+tasks:
+  - name: "Task with flags"
+    type: prompt
+    prompt: "Do something"
+    prompt_flags: "--chrome --permission-mode acceptEdits"
+""")
+
+        config = parse_yaml_config(config_file)
+
+        assert len(config.tasks) == 1
+        assert config.tasks[0].name == "Task with flags"
+        assert config.tasks[0].prompt_flags == "--chrome --permission-mode acceptEdits"
+
+    def test_parse_prompt_flags_none(self, tmp_path):
+        """Test parsing a task without prompt_flags (should be None)."""
+        config_file = tmp_path / "no_flags.yaml"
+        config_file.write_text("""
+version: "1.0"
+tasks:
+  - name: "Task without flags"
+    type: prompt
+    prompt: "Do something"
+""")
+
+        config = parse_yaml_config(config_file)
+
+        assert len(config.tasks) == 1
+        assert config.tasks[0].prompt_flags is None
+
+    def test_parse_prompt_flags_invalid_type(self, tmp_path):
+        """Test parsing task with invalid prompt_flags type."""
+        config_file = tmp_path / "invalid_flags.yaml"
+        config_file.write_text("""
+version: "1.0"
+tasks:
+  - name: "Task with invalid flags"
+    type: prompt
+    prompt: "Do something"
+    prompt_flags: 123
+""")
+
+        with pytest.raises(ValueError, match="invalid 'prompt_flags' value"):
+            parse_yaml_config(config_file)
+
+    def test_prompt_flags_task_config(self):
+        """Test creating TaskConfig with prompt_flags."""
+        task = TaskConfig(
+            name="Test task",
+            prompt="Do something",
+            prompt_flags="--chrome --permission-mode acceptEdits"
+        )
+
+        assert task.prompt_flags == "--chrome --permission-mode acceptEdits"
+
+    def test_prompt_flags_default_none(self):
+        """Test that prompt_flags defaults to None."""
+        task = TaskConfig(
+            name="Test task",
+            prompt="Do something"
+        )
+
+        assert task.prompt_flags is None
+
+    @pytest.mark.asyncio
+    async def test_execute_claude_prompt_with_flags(self):
+        """Test execute_claude_prompt with custom flags."""
+        mock_process = AsyncMock()
+        mock_process.communicate = AsyncMock(return_value=(b"Success output", b""))
+        mock_process.returncode = 0
+
+        with patch('asyncio.create_subprocess_shell', return_value=mock_process) as mock_subprocess:
+            from n4_cli.commands.autoagent import execute_claude_prompt
+            success, output, error_type = await execute_claude_prompt(
+                "Test prompt",
+                "sonnet",
+                "--chrome --permission-mode acceptEdits"
+            )
+
+            assert success is True
+            assert output == "Success output"
+            # Verify the command included the custom flags
+            call_args = mock_subprocess.call_args[0][0]
+            assert "--chrome" in call_args
+            assert "--permission-mode acceptEdits" in call_args
+
+    @pytest.mark.asyncio
+    async def test_execute_claude_prompt_default_flags(self):
+        """Test execute_claude_prompt without custom flags uses default."""
+        mock_process = AsyncMock()
+        mock_process.communicate = AsyncMock(return_value=(b"Success output", b""))
+        mock_process.returncode = 0
+
+        with patch('asyncio.create_subprocess_shell', return_value=mock_process) as mock_subprocess:
+            from n4_cli.commands.autoagent import execute_claude_prompt
+            success, output, error_type = await execute_claude_prompt(
+                "Test prompt",
+                "sonnet"
+            )
+
+            assert success is True
+            # Verify the command included the default permission mode
+            call_args = mock_subprocess.call_args[0][0]
+            assert "--permission-mode acceptEdits" in call_args
+
+    @pytest.mark.asyncio
+    async def test_execute_task_with_prompt_flags(self):
+        """Test execute_task passes prompt_flags to execute_claude_prompt."""
+        task = TaskConfig(
+            name="Test task",
+            prompt="Do something",
+            prompt_flags="--chrome --dangerously-skip-permissions"
+        )
+
+        with patch('n4_cli.commands.autoagent.execute_claude_prompt',
+                   return_value=(True, "Success", None)) as mock_execute:
+            success, output, error_type = await execute_task(task, 1, 1, verbose=False)
+
+            assert success is True
+            # Verify execute_claude_prompt was called with the flags
+            mock_execute.assert_called_once_with(
+                "Do something",
+                "sonnet",
+                "--chrome --dangerously-skip-permissions"
+            )

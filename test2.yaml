@@ -1,0 +1,34 @@
+version: "1.0"
+
+# Global default settings (can be overridden per task)
+defaults:
+  model: sonnet  # Options: sonnet, opus, haiku (for prompt tasks)
+  agent: claude  # Options: claude, codex (agent type to use for prompt tasks)
+  execution_mode: sequential # Options: sequential, parallel
+  branch_strategy: separate  # Options: separate (create new branches), main (work on main)
+  auto_push: false  # Whether to push to remote after successful task completion
+  abort_on_failure: true  # Abort all remaining tasks if one fails
+
+tasks:
+  - name: compute1
+    type: prompt  # Optional, defaults to "prompt"
+    prompt: |
+      calculate 1 + 1
+    model: haiku # Override default model
+    execution_step: 1  # Runs in parallel with Format code
+
+  - name: compute2
+    type: prompt  # Optional, defaults to "prompt"
+    prompt: |
+      calculate 2 + 2
+    depends_on:
+      - compute1
+    model: haiku # Override default model
+    execution_step: 1  # Runs in parallel with Format code
+
+  - name: Run tests
+    type: command
+    command: uv run pytest tests/ -v
+    working_directory: .  # Optional: specify working directory
+    timeout: 600  # Optional: timeout in seconds (default: 300)
+    execution_step: 2  # Runs in parallel with Format code

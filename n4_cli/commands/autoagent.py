@@ -153,13 +153,13 @@ def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
     return AutoAgentConfig(version=data.get('version', '1.0'), defaults=defaults, tasks=tasks)
 
 
-async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbose: bool = False) -> Tuple[bool, str, Optional[str]]:
+async def execute_task(task: TaskConfig, step_num: int, total_steps: int, verbose: bool = False) -> Tuple[bool, str, Optional[str]]:
     """Execute a single task (prompt, command, or goto).
 
     Args:
         task: TaskConfig to execute
-        task_num: Current task number (1-indexed)
-        total_tasks: Total number of tasks
+        step_num: Current step number (1-indexed)
+        total_steps: Total number of steps
         verbose: Whether to show verbose output
 
     Returns:
@@ -167,7 +167,7 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
         error_type can be 'rate_limit', 'auth_error', 'generic', 'goto', or None
         For goto tasks, error_type is 'goto' and output contains the step number to jump to
     """
-    logger.info(f"🚀 Starting task {task_num}/{total_tasks}: {task.name}")
+    logger.info(f"🚀 Starting step {step_num}/{total_steps}: {task.name}")
     logger.info(f"   Type: {task.task_type}")
 
     if task.branch:
@@ -202,16 +202,16 @@ async def execute_task(task: TaskConfig, task_num: int, total_tasks: int, verbos
             success, output, error_type = await execute_claude_prompt(task.prompt, task.model, task.prompt_flags)
 
         if success:
-            logger.info(f"✅ Task {task_num}/{total_tasks} completed successfully: {task.name}")
+            logger.info(f"✅ Step {step_num}/{total_steps} completed successfully: {task.name}")
         else:
-            logger.error(f"❌ Task {task_num}/{total_tasks} failed: {task.name}")
+            logger.error(f"❌ Step {step_num}/{total_steps} failed: {task.name}")
             if error_type:
                 logger.error(f"   Error type: {error_type}")
 
         return success, output, error_type
 
     except Exception as e:
-        logger.error(f"❌ Task {task_num}/{total_tasks} failed with exception: {task.name}")
+        logger.error(f"❌ Step {step_num}/{total_steps} failed with exception: {task.name}")
         logger.error(f"   Exception: {str(e)}")
         return False, str(e), 'generic'
 
@@ -492,7 +492,8 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
         abort_on_failure: Whether to abort on task failure
     """
     total_tasks = sum(len(batch) for batch in batches)
-    logger.info(f"⚡ Starting step-based execution of {total_tasks} task(s) in {len(batches)} step(s)")
+    total_steps = len(batches)
+    logger.info(f"⚡ Starting step-based execution of {total_tasks} task(s) in {total_steps} step(s)")
 
     # Build a mapping of execution_step to batch index for goto support
     step_to_batch_idx: Dict[int, int] = {}
@@ -501,7 +502,6 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
         if batch:
             step_to_batch_idx[batch[0].execution_step] = idx
 
-    completed_count = 0
     batch_idx = 0
 
     while batch_idx < len(batches):
@@ -510,14 +510,14 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
 
         click.echo(click.style(f"\n{'='*80}", fg="cyan"))
         if len(batch) == 1:
-            click.echo(click.style(f"Step {step_num}/{len(batches)}: {batch[0].name}", fg="cyan", bold=True))
+            click.echo(click.style(f"Step {step_num}/{total_steps}: {batch[0].name}", fg="cyan", bold=True))
         else:
-            click.echo(click.style(f"Step {step_num}/{len(batches)}: {len(batch)} task(s) in parallel", fg="cyan", bold=True))
+            click.echo(click.style(f"Step {step_num}/{total_steps}: {len(batch)} task(s) in parallel", fg="cyan", bold=True))
             click.echo(click.style(f"Tasks: {[task.name for task in batch]}", fg="cyan"))
         click.echo(click.style(f"{'='*80}", fg="cyan"))
 
         # Execute all tasks in this step concurrently
-        results = await asyncio.gather(*[execute_task(task, completed_count + i + 1, total_tasks, verbose) for i, task in enumerate(batch)], return_exceptions=True)
+        results = await asyncio.gather(*[execute_task(task, step_num, total_steps, verbose) for i, task in enumerate(batch)], return_exceptions=True)
 
         # Track if we need to goto a different step
         goto_target_step: Optional[int] = None
@@ -560,8 +560,6 @@ async def run_step_execution(batches: List[List[TaskConfig]], verbose: bool, abo
                     if abort_on_failure:
                         logger.error(f"Task '{task.name}' failed - aborting")
                         raise TaskAbortException(f"Task '{task.name}' failed")
-
-        completed_count += len(batch)
 
         # Handle goto: jump to the target step if specified
         if goto_target_step is not None:

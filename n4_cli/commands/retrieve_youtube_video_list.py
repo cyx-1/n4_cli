@@ -12,11 +12,11 @@ except ImportError:
     yt_dlp = None
 
 
-def format_duration(seconds: Optional[int]) -> str:
+def format_duration(seconds: Optional[float]) -> str:
     """Format duration in seconds to HH:MM:SS or MM:SS format.
 
     Args:
-        seconds: Duration in seconds, or None if unknown
+        seconds: Duration in seconds (can be int or float), or None if unknown
 
     Returns:
         Formatted duration string
@@ -24,9 +24,12 @@ def format_duration(seconds: Optional[int]) -> str:
     if seconds is None:
         return "Unknown"
 
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
+    # Convert to integer for formatting
+    total_seconds = int(seconds)
+
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
 
     if hours > 0:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
@@ -191,7 +194,7 @@ def retrieve_youtube_video_list(channel_url: str, output: Path, max_videos: Opti
         click.echo(click.style(f"\nSaved {len(videos)} video(s) to: {output}", fg="green", bold=True))
 
         # Show summary
-        total_duration = sum(v.get('duration_seconds', 0) or 0 for v in videos)
+        total_duration = sum(v.get('duration_seconds') or 0 for v in videos)
         click.echo(click.style(f"Total duration: {format_duration(total_duration)}", fg="blue"))
 
     except IOError as e:

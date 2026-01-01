@@ -1,7 +1,9 @@
 """Autoagent command - Execute tasks from autoagent.yaml file."""
 
 import asyncio
+import json
 import logging
+import os
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -57,6 +59,220 @@ class AutoAgentConfig:
 def is_claude_available() -> bool:
     """Check if claude CLI is available."""
     return shutil.which("claude") is not None
+
+
+def get_claude_history_folder() -> Optional[Path]:
+    """Get the Claude history folder for the current project.
+
+    Claude stores conversation history in ~/.claude/projects/{folder_name}/
+    where folder_name is the current working directory path with special chars replaced by dashes.
+
+    Returns:
+        Path to the history folder if it exists, None otherwise
+    """
+    # Get home directory (works on both Linux and Windows)
+    home = Path.home()
+    claude_projects = home / ".claude" / "projects"
+
+    if not claude_projects.exists():
+        return None
+
+    # Get current working directory and convert to folder name format
+    cwd = Path.cwd().absolute()
+    # Claude replaces slashes, backslashes, and underscores with dashes, prefixed with a dash
+    folder_name = str(cwd).replace("/", "-").replace("\\", "-").replace("_", "-")
+    if not folder_name.startswith("-"):
+        folder_name = "-" + folder_name
+
+    history_folder = claude_projects / folder_name
+    if history_folder.exists():
+        return history_folder
+
+    return None
+
+
+def get_latest_history_file(history_folder: Path) -> Optional[Path]:
+    """Get the most recently modified JSONL file in the history folder.
+
+    Args:
+        history_folder: Path to the Claude history folder
+
+    Returns:
+        Path to the most recent JSONL file, or None if no files found
+    """
+    jsonl_files = list(history_folder.glob("*.jsonl"))
+    if not jsonl_files:
+        return None
+
+    # Sort by modification time, most recent first
+    jsonl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    return jsonl_files[0]
+
+
+def parse_history_message(line: str) -> Optional[Dict]:
+    """Parse a single line from the JSONL history file.
+
+    Args:
+        line: A single line from the JSONL file
+
+    Returns:
+        Parsed message dict with extracted info, or None if not relevant
+    """
+    try:
+        data = json.loads(line.strip())
+    except json.JSONDecodeError:
+        return None
+
+    msg_type = data.get("type")
+
+    # Skip non-message types
+    if msg_type not in ("user", "assistant"):
+        return None
+
+    result = {
+        "type": msg_type,
+        "timestamp": data.get("timestamp", ""),
+        "content": [],
+    }
+
+    message = data.get("message", {})
+    content = message.get("content")
+
+    if msg_type == "user":
+        # User messages have content as a string
+        if isinstance(content, str):
+            result["content"].append({"type": "text", "text": content})
+    elif msg_type == "assistant":
+        # Assistant messages have content as an array
+        if isinstance(content, list):
+            for item in content:
+                item_type = item.get("type")
+                if item_type == "text":
+                    result["content"].append({"type": "text", "text": item.get("text", "")})
+                elif item_type == "tool_use":
+                    tool_name = item.get("name", "unknown")
+                    result["content"].append({"type": "tool_use", "name": tool_name})
+
+    # Only return if we have content
+    if result["content"]:
+        return result
+    return None
+
+
+def format_history_message(msg: Dict, max_text_length: int = 200) -> str:
+    """Format a parsed history message for console display.
+
+    Args:
+        msg: Parsed message dict from parse_history_message
+        max_text_length: Maximum length for text content before truncation
+
+    Returns:
+        Formatted string for display
+    """
+    msg_type = msg["type"]
+    prefix = "👤 User" if msg_type == "user" else "🤖 Claude"
+
+    parts = []
+    for item in msg["content"]:
+        if item["type"] == "text":
+            text = item["text"]
+            if len(text) > max_text_length:
+                text = text[:max_text_length] + "..."
+            # Replace newlines with spaces for compact display
+            text = text.replace("\n", " ").strip()
+            parts.append(text)
+        elif item["type"] == "tool_use":
+            parts.append(f"[Tool: {item['name']}]")
+
+    content = " | ".join(parts) if parts else "(no content)"
+    return f"{prefix}: {content}"
+
+
+class ClaudeHistoryMonitor:
+    """Monitor Claude conversation history and display updates."""
+
+    def __init__(self):
+        self.last_position = 0
+        self.last_file: Optional[Path] = None
+        self.seen_uuids: Set[str] = set()
+        self._stop_event = asyncio.Event()
+
+    def reset(self):
+        """Reset the monitor state for a new Claude execution."""
+        self.last_position = 0
+        self.last_file = None
+        self.seen_uuids.clear()
+        self._stop_event.clear()
+
+    def stop(self):
+        """Signal the monitor to stop."""
+        self._stop_event.set()
+
+    def read_new_messages(self) -> List[Dict]:
+        """Read new messages from the history file.
+
+        Returns:
+            List of new parsed messages
+        """
+        history_folder = get_claude_history_folder()
+        if not history_folder:
+            return []
+
+        latest_file = get_latest_history_file(history_folder)
+        if not latest_file:
+            return []
+
+        # If the file changed, reset position but keep seen_uuids
+        if self.last_file != latest_file:
+            self.last_file = latest_file
+            self.last_position = 0
+
+        messages = []
+        try:
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                f.seek(self.last_position)
+                for line in f:
+                    if line.strip():
+                        # Check UUID to avoid duplicates
+                        try:
+                            data = json.loads(line.strip())
+                            uuid = data.get("uuid")
+                            if uuid and uuid in self.seen_uuids:
+                                continue
+                            if uuid:
+                                self.seen_uuids.add(uuid)
+                        except json.JSONDecodeError:
+                            pass
+
+                        msg = parse_history_message(line)
+                        if msg:
+                            messages.append(msg)
+                self.last_position = f.tell()
+        except (OSError, IOError):
+            pass
+
+        return messages
+
+    async def monitor_loop(self, interval: float = 1.0):
+        """Continuously monitor for new messages.
+
+        Args:
+            interval: Time between checks in seconds
+        """
+        while not self._stop_event.is_set():
+            messages = self.read_new_messages()
+            for msg in messages:
+                formatted = format_history_message(msg)
+                click.echo(click.style(f"   📜 {formatted}", fg="magenta"))
+
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+
+
+# Global history monitor instance
+_history_monitor = ClaudeHistoryMonitor()
 
 
 def parse_yaml_config(file_path: Path) -> AutoAgentConfig:
@@ -361,8 +577,29 @@ async def execute_claude_prompt(prompt: str, model: str = "sonnet", prompt_flags
 
         logger.debug(f"Executing command: {base_cmd} -p [prompt]")
 
-        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await proc.communicate()
+        # Reset and start the history monitor
+        _history_monitor.reset()
+        click.echo(click.style("\n   📡 Monitoring Claude conversation history...", fg="magenta"))
+
+        # Start the history monitor as a background task
+        monitor_task = asyncio.create_task(_history_monitor.monitor_loop(interval=1.0))
+
+        try:
+            proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await proc.communicate()
+        finally:
+            # Stop the monitor
+            _history_monitor.stop()
+            try:
+                await asyncio.wait_for(monitor_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
+
+        click.echo(click.style("   📡 History monitoring complete.", fg="magenta"))
 
         if proc.returncode == 0:
             output = stdout.decode().strip()

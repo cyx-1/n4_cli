@@ -502,24 +502,62 @@ async def execute_shell_command(command: str, working_directory: Optional[str] =
         # Set working directory if specified
         cwd = working_directory if working_directory else None
 
-        # Execute command
-        proc = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd)
+        # Execute command with unbuffered output
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'  # Ensure Python doesn't buffer output
+
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+            env=env
+        )
+
+        # Stream output in real-time
+        stdout_lines = []
+        stderr_lines = []
+
+        async def read_stream(stream, lines_list, prefix=""):
+            """Read from a stream line by line and print in real-time."""
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                decoded_line = line.decode().rstrip()
+                lines_list.append(decoded_line)
+                # Print to console in real-time
+                if prefix:
+                    click.echo(f"{prefix}{decoded_line}")
+                else:
+                    click.echo(decoded_line)
 
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            # Run both stdout and stderr readers concurrently with timeout
+            await asyncio.wait_for(
+                asyncio.gather(
+                    read_stream(proc.stdout, stdout_lines),
+                    read_stream(proc.stderr, stderr_lines),
+                    proc.wait()
+                ),
+                timeout=timeout
+            )
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return False, f"Command timed out after {timeout} seconds", 'timeout'
+            # Still capture any output that was printed before timeout
+            output = "\n".join(stdout_lines)
+            if stderr_lines:
+                output += "\n--- STDERR ---\n" + "\n".join(stderr_lines)
+            output += f"\n\nCommand timed out after {timeout} seconds"
+            return False, output, 'timeout'
 
         # Combine stdout and stderr
-        output = ""
-        if stdout:
-            output += stdout.decode()
-        if stderr:
+        output = "\n".join(stdout_lines) if stdout_lines else ""
+        if stderr_lines:
             if output:
                 output += "\n--- STDERR ---\n"
-            output += stderr.decode()
+            output += "\n".join(stderr_lines)
 
         output = output.strip() if output else "Command completed with no output"
 

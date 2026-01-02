@@ -1,9 +1,24 @@
 """Check Claude usage command - checks usage against a threshold."""
 
+import os
 import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Force unbuffered output for subprocess execution
+# Set environment variable to disable buffering
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+# Try to reconfigure stdout/stderr for line buffering
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(line_buffering=True)
+except (AttributeError, ValueError, OSError):
+    # If reconfigure fails (e.g., on Windows with certain subprocess setups), ignore
+    pass
 
 import click
 import yaml

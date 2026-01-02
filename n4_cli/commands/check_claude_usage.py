@@ -89,9 +89,9 @@ def _check_usage_once(usage_file, threshold):
 
             # Calculate wait duration
             wait_seconds = (target_datetime - current_datetime).total_seconds()
+            wait_minutes = wait_seconds / 60
 
             if wait_seconds > 0:
-                wait_minutes = wait_seconds / 60
                 print(f"[ACTION] Usage limit exceeded - waiting {wait_minutes:.1f} minutes until {target_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')}", flush=True)
                 print(f"[ACTION] This ensures we wait 5 minutes after the usage reset at {reset_datetime.strftime('%Y-%m-%d %H:%M:%S %Z')}", flush=True)
                 print(f"[WAITING] Sleeping for {wait_seconds:.0f} seconds...", flush=True)
